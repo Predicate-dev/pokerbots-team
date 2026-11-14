@@ -77,6 +77,24 @@ model.
 | `ev_labels`, `ev_runouts` | false, 32 | All-in EV labels for grading |
 | `table_talk` | false | Optional sanitized `say` line |
 
+## Training-only parameters
+
+Opt-in, validated before the table starts, and never set by the arena; a task without them plays the official game.
+Details and rules for each are in [`training.py`](src/poker_harness/training.py) and the top of
+[`grading.py`](src/poker_harness/grading.py); [`rl/make_training_datasets.py`](../rl/make_training_datasets.py)
+builds datasets that use them.
+
+| Key | Meaning |
+| --- | --- |
+| `env_params.initial_stacks` | One stack per seat (0 = already busted) instead of equal starting stacks |
+| `env_params.first_hand`, `last_hand` | Play only this window of the game's hands; prompts keep the true "Hand N of 30" |
+| `env_params.button_seat` | The button on the first hand played |
+| `env_params.initial_scratchpad` | The scratchpad the task starts with: a string (policy seats) or `{seat: string}` |
+| `env_params.opponent_seats` | `{seat: spec}`: `"scripted:maniac"`, `"scripted:nit"`, `"scripted:calling_station"`, `"scripted:random"`, or `{model, persona, api, reasoning_effort, thinking}` (persona text is appended to that seat's system prompt) |
+| `grader_params.reward` | `"ev"` (default) or `"placement"`: the finishing place with a chip term, for multi-hand games |
+| `grader_params.chip_weight` | Placement only: the chip term's share, 0-1 (default 0.25) |
+| `grader_params.ev_unit_bb` | EV only: big blinds per reward point (default 1); use K for a K-hand task |
+
 ## Table talk
 
 With `table_talk` on:

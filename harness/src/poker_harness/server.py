@@ -43,12 +43,14 @@ from .completions import (
     table_rules,
     with_preset,
 )
+from .engine import ScriptedPlayer
 from .ev import label_ev
 from .game import play_session
 from .grading import GradingError, bounded, check_grader_params, failure_score, grade_log
 from .labels import label_folds
 from .prompts import TableRules, talk_fields
 from .seat import ModelSeat
+from .training import SCRIPTED, opponent_specs, spec_params, table_start
 
 logger = logging.getLogger("poker_harness.server")
 
@@ -235,7 +237,16 @@ def create_app(
         try:
             seats = int(params.get("seats", 10))
             policy = {int(i) for i in params.get("policy_seats", range(seats))}
-            if params.get("opponent_model") and not opponent_key and len(policy) < seats:
+            # Training-only setups (`training.py`): both are empty for a task that sets none of their keys.
+            start = table_start(params, rollout.rules, policy)
+            specs = opponent_specs(params, seats, policy)
+            modeled = [  # opponent seats that call the opponent endpoint
+                i
+                for i in range(seats)
+                if i not in policy
+                and (isinstance(specs.get(i), dict) or (i not in specs and params.get("opponent_model")))
+            ]
+            if modeled and not opponent_key:
                 raise RuntimeError("opponent seats need POKER_OPPONENT_API_KEY or AC2_API_KEY in the harness environment")
             decision_timeout = float(params.get("decision_timeout_seconds", DEFAULT_DECISION_TIMEOUT_SECONDS))
             opponent_timeout = float(params.get("opponent_timeout_seconds", decision_timeout))
@@ -261,7 +272,7 @@ def create_app(
                     if params.get("opponent_model")
                     else policy_cleanup
                 )
-                players = [
+                players: list[Any] = [
                     ModelSeat(
                         f"seat{i}",
                         policy_complete if i in policy else opponent_complete,
@@ -272,8 +283,37 @@ def create_app(
                     )
                     for i in range(seats)
                 ]
+                for i, spec in specs.items():  # `env_params.opponent_seats`: scripted players and per-seat models
+                    if isinstance(spec, str):
+                        players[i] = ScriptedPlayer(f"seat{i}", spec.removeprefix(SCRIPTED), int(params["seed"]))
+                        continue
+                    theirs = spec_params(params, spec)
+                    api = responses_completion if theirs.get("opponent_api") == "responses" else relay_completion
+                    seat_params = opponent_params(theirs)
+                    key = opponent_key or ""
+                    players[i] = ModelSeat(
+                        f"seat{i}",
+                        api(opponent_client, opponent_url, key, seat_params),
+                        rollout.rules,
+                        model=f"opponent/{theirs['opponent_model']}",
+                        timeout_seconds=opponent_timeout,
+                        cleanup_complete=api(opponent_client, opponent_url, key, cleanup_params(seat_params)),
+                        persona=spec.get("persona", ""),
+                    )
+                for i, text in start.scratchpads.items():  # `env_params.initial_scratchpad`
+                    if isinstance(players[i], ModelSeat):
+                        players[i].scratchpad = text
                 rollout.policy_seats = [f"seat{i}" for i in sorted(policy)]
-                rollout.log = await play_session(rollout.id, int(params["seed"]), players, rollout.rules)
+                rollout.log = await play_session(
+                    rollout.id,
+                    int(params["seed"]),
+                    players,
+                    rollout.rules,
+                    initial_stacks=start.initial_stacks,
+                    first_hand=start.first_hand,
+                    last_hand=start.last_hand,
+                    button_seat=start.button_seat,
+                )
                 label_folds(rollout.log, set(rollout.policy_seats))
                 if params.get("ev_labels"):  # all-in EV for the policy seats, scored by grading.py
                     rollout.log = await asyncio.get_running_loop().run_in_executor(

@@ -102,6 +102,7 @@ class ModelSeat:
     model: str | None = None
     timeout_seconds: float | None = None
     cleanup_complete: Complete | None = None  # the after-hand turn's caller (its own token cap); default `complete`
+    persona: str = ""  # training-only: text appended to this seat's system prompt (`env_params.opponent_seats`)
     turn: int = field(default=0, init=False)
     messages: list[Message] = field(default_factory=list, init=False)
     _hand: int | None = field(default=None, init=False)
@@ -150,7 +151,8 @@ class ModelSeat:
 
     @property
     def system(self) -> str:
-        return system_prompt(self.rules)
+        prompt = system_prompt(self.rules)
+        return f"{prompt}\n\n{self.persona}" if self.persona else prompt
 
     def _next_messages(self, ctx: DecisionContext) -> list[Message]:
         """Start the hand's conversation, or answer the last call and add what happened since."""

@@ -22,6 +22,31 @@
 - **Checkpoints and eval:** a checkpoint every 10 steps (`--checkpoint-every`), and an in-run eval on
   `pokerbots-select` at step 0 (base) and every 10 steps (`--eval-every`, or `--no-eval`).
 
+## Training for finishing place, not chips
+
+The arena rates a game on where you finish, not on chips: first by 1 chip equals first by 400, and a busted seat
+ranks below every seat still in. The default reward can't see that. It scores one fresh first hand on chips, capped
+at 5 BB either way, so losing a whole stack costs the same as losing 5 BB and the model never plays a hand late in
+a game. The finishing-place datasets fix both:
+
+```bash
+uv run python rl/make_dataset.py --placement --prefix pokerbots-place --dry-run
+uv run python rl/make_dataset.py --placement --prefix pokerbots-place
+uv run python rl/train.py --prefix pokerbots-place --dry-run
+```
+
+- **Half the tasks are mid-game hands.** The model is dropped into one hand of a 30-hand game ("Hand 27 of 30")
+  with uneven stacks and sometimes a seat already out (`env_params.starting_stacks`, `first_hand`, `play_hands`).
+  Half of those are hand 24 or later. The stacks are made up (`vals_tools/tasks.py`, `midgame_stacks`), not sampled
+  from real games, and the scratchpad still starts blank.
+- **Those hands are scored on finishing place** (`grader_params.reward: "placement"`): the change in the share of
+  the table the seat is expected to finish above, `6 + clip(10 x change, -5, +5)`. Going from an even table to
+  certain last is -5; the same chips are worth more the fewer hands are left. See `harness/.../placement.py`.
+- **The other half are the usual fresh first hands, scored on chips,** where the two rewards agree and chips give
+  GRPO a stronger signal.
+- Restart the harness after pulling this change, and only between runs. The arena still plays the official rules:
+  these settings exist only in training tasks.
+
 ## Run
 
 With the harness and connector running and the datasets uploaded:

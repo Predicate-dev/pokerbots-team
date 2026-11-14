@@ -48,6 +48,19 @@ the all-in equity (when the task has EV labels), which removes the runout's luck
 every other hand uses the stacks as they ended. Use it with mid-game tasks (`env_params.starting_stacks`,
 `first_hand`, `play_hands`); tasks without `reward` are scored on chips exactly as before.
 
+Ledger accuracy (`grader_params.ledger_weight`)
+----------------------------------------------
+At the event the scratchpad is the model's only memory of a game, and `ledger.py` gives it a fixed layout whose
+numbers have one right answer after every hand. A task with `ledger_weight: w` (0 < w < 10) hands `w` points of the
+10-point band to that answer:
+
+    score = 6 + clip(hand_reward, -5, +5) * (10 - w) / 10 + w * (accuracy - 0.5)
+
+`accuracy` is the share of the reference ledger's facts (stacks and counters for every seat) that the trained seat's
+scratchpad gets right after its last after-hand update, starting from the scratchpad it was given (blank, or the
+task's `starting_ledger`). A perfect ledger and a missing one are `w` points apart whatever the cards did, real
+hands still score in [1, 11], and failures still score 0. It works with either reward.
+
 On single-hand tasks the scratchpad starts blank and its after-hand update is never
 read, so nothing here rewards or exercises scratchpad use; how to train that is up to you.
 """
@@ -59,6 +72,9 @@ from dataclasses import dataclass
 from typing import Any
 
 from .ev import _contributions
+from .ledger import accuracy as ledger_accuracy
+from .ledger import parse as parse_ledger
+from .ledger import update as update_ledger
 from .placement import DEFAULT_NOISE_BB, place_value
 
 REWARD_OFFSET = 6.0  # shifts the clipped reward [-5, +5] to [1, 11]
@@ -71,7 +87,7 @@ MAX_SCORE_BYTES = 1 << 20  # AC2 rejects collect_score replies over 1 MiB
 # EXTENSION POINT 2: the `grader_params` keys your reward accepts. Unknown keys fail the grading, so a typo in a
 # dataset can't silently change the reward.
 PLACEMENT_PARAMS = frozenset({"hands_left", "placement_scale", "placement_noise_bb"})
-GRADER_PARAMS: frozenset[str] = frozenset({"reward"}) | PLACEMENT_PARAMS
+GRADER_PARAMS: frozenset[str] = frozenset({"reward", "ledger_weight"}) | PLACEMENT_PARAMS
 REWARDS = ("chips", "placement")
 PLACEMENT_SCALE = 10.0  # reward points per unit of place value: half the table = the whole +-5 band
 
@@ -93,6 +109,7 @@ class SeatResult:
     hands: int
     place_before: float | None = None  # expected share of the table finished above; only with the placement reward
     place_after: float | None = None
+    ledger_accuracy: float | None = None  # share of the reference ledger the scratchpad got right; with ledger_weight
 
 
 def check_grader_params(grader_params: dict[str, Any] | None) -> dict[str, Any]:
@@ -101,6 +118,9 @@ def check_grader_params(grader_params: dict[str, Any] | None) -> dict[str, Any]:
     unknown = set(params) - GRADER_PARAMS
     if unknown:
         raise GradingError(f"unknown grader_params: {sorted(unknown)}")
+    weight = params.get("ledger_weight")
+    if weight is not None and (isinstance(weight, bool) or not isinstance(weight, int | float) or not 0 < weight < 10):
+        raise GradingError("grader_params.ledger_weight must be a number between 0 and 10")
     reward = params.get("reward", "chips")
     if reward not in REWARDS:
         raise GradingError(f"grader_params.reward must be one of {REWARDS}, not {reward!r}")
@@ -157,6 +177,21 @@ def place_values(log: dict[str, Any], seat: str, params: dict[str, Any]) -> tupl
     return before, place_value(log["final_stacks"], seat, left, noise)
 
 
+def ledger_score(log: dict[str, Any], seat: str) -> float:
+    """How much of the reference ledger the trained seat's final scratchpad gets right (`ledger.py`). The reference
+    starts from the scratchpad the seat had before its first hand and adds every hand it was dealt into."""
+    private = (log.get("private") or {}).get(seat)
+    dealt = [hand for hand in log["hands"] if seat in hand["starting_state"]]
+    if private is None or not dealt:
+        raise GradingError(f"ledger_weight needs a scratchpad table and a hand dealt to {seat}")
+    before = (private.get("hands") or {}).get(str(dealt[0]["hand_number"]), {}).get("scratchpad_before", "")
+    reference = parse_ledger(before)
+    total = reference.total if reference else 0  # the layout names the game's length; it is not graded
+    for hand in dealt:
+        reference = update_ledger(reference, hand, seat, total)
+    return ledger_accuracy(private.get("scratchpad", ""), reference)
+
+
 def seat_result(log: dict[str, Any], policy_seats: list[str], params: dict[str, Any] | None = None) -> SeatResult:
     """Sum the trained seat's results over every hand in the log."""
     policy = set(policy_seats)
@@ -180,7 +215,13 @@ def seat_result(log: dict[str, Any], policy_seats: list[str], params: dict[str, 
         if len(policy) != 1:
             raise GradingError("the placement reward scores exactly one policy seat")
         place_before, place_after = place_values(log, next(iter(policy)), params or {})
+    accuracy = None
+    if (params or {}).get("ledger_weight"):
+        if len(policy) != 1:
+            raise GradingError("ledger_weight scores exactly one policy seat")
+        accuracy = ledger_score(log, next(iter(policy)))
     return SeatResult(
+        ledger_accuracy=accuracy,
         place_before=place_before,
         place_after=place_after,
         ev_bb=ev_bb,
@@ -215,7 +256,11 @@ def grade_log(log: dict[str, Any], policy_seats: list[str], params: dict[str, An
     if result.format_errors:  # model-caused failure: exactly 0, below every real hand
         score = FAILURE_SCORE
     else:
-        score = REWARD_OFFSET + max(REWARD_FLOOR, min(REWARD_CEILING, hand_reward(result, params or {})))
+        played = max(REWARD_FLOOR, min(REWARD_CEILING, hand_reward(result, params or {})))
+        if result.ledger_accuracy is not None:  # `ledger_weight` points of the band go to the ledger
+            weight = float((params or {})["ledger_weight"])
+            played = played * (10.0 - weight) / 10.0 + weight * (result.ledger_accuracy - 0.5)
+        score = REWARD_OFFSET + played
     placed = result.place_before is not None and result.place_after is not None
     place_note = f" Place value {result.place_before:.3f} -> {result.place_after:.3f}." if placed else ""
     place_artifacts = (
@@ -223,6 +268,9 @@ def grade_log(log: dict[str, Any], policy_seats: list[str], params: dict[str, An
         if placed
         else {}
     )
+    if result.ledger_accuracy is not None:
+        place_note += f" Ledger {result.ledger_accuracy:.0%} right."
+        place_artifacts["ledger_accuracy"] = result.ledger_accuracy
     return {
         "score": score,
         "reasoning": f"Policy seat {'/'.join(sorted(policy_seats))}: EV {result.ev_bb:+.1f} BB "

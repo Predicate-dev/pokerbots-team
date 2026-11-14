@@ -189,3 +189,11 @@ def test_the_builder_prints_by_default_and_names_train_and_select_per_family(
     monkeypatch.setattr(sys, "argv", ["make_training_datasets.py", "--upload", "--dry-run"])
     with pytest.raises(SystemExit):
         builder.main()
+
+
+def test_the_select_split_defaults_to_a_quarter_of_the_train_count_and_zero_means_zero() -> None:
+    builder = load_builder()
+    built = builder.build(builder.parser().parse_args(["--family", "endgame", "--count", "8"]))
+    assert [len(tasks) for tasks in built.values()] == [8, 2]
+    built = builder.build(builder.parser().parse_args(["--family", "endgame", "--count", "4", "--select-count", "0"]))
+    assert [len(tasks) for tasks in built.values()] == [4, 0]

@@ -64,7 +64,12 @@ def build(args: argparse.Namespace) -> dict[str, list]:
     families = FAMILIES if args.family == "all" else (args.family,)
     built: dict[str, list] = {}
     for family in families:
-        counts = (args.count or DEFAULT_COUNTS[family][0], args.select_count or DEFAULT_COUNTS[family][1])
+        train = DEFAULT_COUNTS[family][0] if args.count is None else args.count
+        if args.select_count is not None:
+            select = args.select_count
+        else:  # a quarter of the train count, as --help says
+            select = DEFAULT_COUNTS[family][1] if args.count is None else args.count // 4
+        counts = (train, select)
         for split, count, seed in zip(("train", "select"), counts, BASE_SEEDS[family], strict=True):
             if family == "strong":
                 tasks = strong_hand_tasks(count, seed, opponents, args.min_chen, args.weak_fraction, args.seats)
@@ -84,7 +89,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--prefix", default="pokerbots")
     p.add_argument("--family", choices=[*FAMILIES, "all"], default="all")
     p.add_argument("--count", type=int, help="train tasks per family (default: 2000 strong, 1000 endgame, 1000 mixed)")
-    p.add_argument("--select-count", type=int, help="select tasks per family (default: a quarter of the above)")
+    p.add_argument("--select-count", type=int, help="select tasks per family (default: a quarter of the train count)")
     p.add_argument("--opponent-model", default="vals-hackathon/ac-vals-model")
     p.add_argument("--opponent-api", choices=["responses", "chat"], default="chat")
     p.add_argument("--opponent-effort", default="none", help="reasoning effort for the opponents, e.g. medium")
@@ -108,6 +113,8 @@ def main() -> None:
     args = parser().parse_args()
     if args.upload and args.dry_run:
         raise SystemExit("--upload and --dry-run can't be combined")
+    if (args.count is not None and args.count < 0) or (args.select_count is not None and args.select_count < 0):
+        raise SystemExit("--count and --select-count can't be negative")
     if args.chip_weight is not None and not 0 <= args.chip_weight <= 1:
         raise SystemExit("--chip-weight must be from 0 to 1")
     built = build(args)

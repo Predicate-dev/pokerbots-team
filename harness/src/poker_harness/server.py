@@ -47,6 +47,8 @@ from .ev import label_ev
 from .game import play_session
 from .grading import GradingError, bounded, check_grader_params, failure_score, grade_log
 from .labels import label_folds
+from .ledger import from_params as ledger_from_params
+from .ledger import render as render_ledger
 from .prompts import TableRules, talk_fields
 from .seat import ModelSeat
 
@@ -128,6 +130,13 @@ ESSENTIAL_RESPONSE = (
     "out_tokens",
     "reasoning_tokens",
 )
+
+
+def starting_scratchpad(params: dict[str, Any]) -> str:
+    """The notes a training task puts in the policy seats' scratchpads before the first hand ("" for none)."""
+    if params.get("starting_ledger"):
+        return render_ledger(ledger_from_params(params["starting_ledger"]))
+    return str(params.get("starting_scratchpad") or "")
 
 
 def _size(log: dict[str, Any]) -> int:
@@ -272,6 +281,11 @@ def create_app(
                     )
                     for i in range(seats)
                 ]
+                # Training only: the policy seats' scratchpads start with these notes instead of empty, either as
+                # given (`starting_scratchpad`) or as a seat ledger rendered from `starting_ledger` (`ledger.py`).
+                notes = starting_scratchpad(params)
+                for i in policy if notes else ():
+                    players[i].scratchpad = notes[: rollout.rules.scratchpad_chars]
                 rollout.policy_seats = [f"seat{i}" for i in sorted(policy)]
                 rollout.log = await play_session(rollout.id, int(params["seed"]), players, rollout.rules)
                 label_folds(rollout.log, set(rollout.policy_seats))

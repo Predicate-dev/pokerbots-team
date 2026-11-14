@@ -55,10 +55,19 @@ class Opponents:
         return params
 
 
-def hand_task(seed: int, policy_seat: int, opponents: Opponents, seats: int = SEATS) -> Task:
+def hand_task(
+    seed: int,
+    policy_seat: int,
+    opponents: Opponents,
+    seats: int = SEATS,
+    extra_env: dict[str, Any] | None = None,
+    grader_params: dict[str, Any] | None = None,
+) -> Task:
     """One hand with the policy in `policy_seat`. The button starts on the last seat, so seat 0 is the small blind,
-    seat 1 the big blind and the last seat the button. `ev_labels` replaces all-in luck with expected value."""
+    seat 1 the big blind and the last seat the button. `ev_labels` replaces all-in luck with expected value.
+    `extra_env` adds to the task's settings; `grader_params` picks a reward other than chips (harness `grading.py`)."""
     return Task(
+        **({"grader_params": grader_params} if grader_params else {}),
         input=[Message(role="user", content=f"Play one hand of {seats}-seat no-limit hold'em from seat {policy_seat}.")],
         env_params=TABLE_RULES
         | {
@@ -69,6 +78,7 @@ def hand_task(seed: int, policy_seat: int, opponents: Opponents, seats: int = SE
             "ev_labels": True,
             "ev_runouts": 64,
             **opponents.env_params(),
+            **(extra_env or {}),
         },
     )
 
@@ -105,11 +115,49 @@ def midgame_stacks(rng: random.Random, seats: int, hand: int, policy_seat: int) 
     return stacks
 
 
-def midgame_task(seed: int, policy_seat: int, opponents: Opponents, seats: int = SEATS) -> Task:
+# The seat ledger (harness `ledger.py`): a fixed scratchpad layout with a line of counters per seat. With
+# `ledger=True` a task starts the policy's scratchpad as a ledger and hands LEDGER_WEIGHT of the 10 reward points to
+# how correctly the model updates it after the hand (`grader_params.ledger_weight`).
+LEDGER_WEIGHT = 2
+OPEN_SIZES = (4, 5, 5, 6, 6, 7, 8)
+
+
+def ledger_row(rng: random.Random, stack: int, dealt: int) -> dict[str, Any]:
+    """Made-up counters for a seat that has been dealt `dealt` hands. They only have to look like a ledger: the
+    opponents in training do not play to them, so they teach keeping the ledger, not reading it."""
+    if stack <= 0:
+        return {"stack": 0}
+    played = round(dealt * rng.uniform(0.15, 0.5))
+    raised = round(played * rng.uniform(0.3, 0.9))
+    return {
+        "stack": stack,
+        "n": dealt,
+        "vp": played,
+        "pr": raised,
+        "3b": round(raised * rng.uniform(0.0, 0.25)),
+        "ab": round(played * rng.uniform(0.2, 1.2)),
+        "pc": round(played * rng.uniform(0.1, 0.9)),
+        "fd": round(played * rng.uniform(0.1, 0.5)),
+        "sd": round(played * rng.uniform(0.1, 0.4)),
+        "open": [rng.choice(OPEN_SIZES) for _ in range(min(3, raised))],
+    }
+
+
+def starting_ledger(rng: random.Random, stacks: list[int], hand: int, policy_seat: int) -> dict[str, Any]:
+    """`env_params.starting_ledger` for a task that starts at `hand`: the ledger as it would stand after hand
+    `hand - 1`. Before the first hand that is the empty layout, every seat at zero."""
+    rows = {f"seat{i}": ledger_row(rng, stack, hand - 1) for i, stack in enumerate(stacks)}
+    return {"hand": hand - 1, "total": GAME_HANDS, "me": f"seat{policy_seat}", "seats": rows}
+
+
+def midgame_task(seed: int, policy_seat: int, opponents: Opponents, seats: int = SEATS, ledger: bool = False) -> Task:
     """One hand from the middle of a 30-hand game, scored on finishing place. The hand number and stacks depend
-    only on `seed`. The model sees "Hand N of 30" and the real stacks; its scratchpad still starts blank."""
+    only on `seed`. The model sees "Hand N of 30" and the real stacks; its scratchpad starts blank, or with
+    `ledger` as a seat ledger it is graded on updating."""
     rng = random.Random(f"midgame:{seed}")
     hand = rng.randint(LATE_FROM, GAME_HANDS) if rng.random() < 0.5 else rng.randint(2, LATE_FROM - 1)
+    stacks = midgame_stacks(rng, seats, hand, policy_seat)
+    notes = {"starting_ledger": starting_ledger(rng, stacks, hand, policy_seat)} if ledger else {}
     return Task(
         input=[
             Message(
@@ -122,36 +170,61 @@ def midgame_task(seed: int, policy_seat: int, opponents: Opponents, seats: int =
         | {
             "seed": seed,
             "seats": seats,
-            "starting_stacks": midgame_stacks(rng, seats, hand, policy_seat),
+            "starting_stacks": stacks,
             "first_hand": hand,
             "play_hands": 1,
             "policy_seats": [policy_seat],
             "ev_labels": True,
             "ev_runouts": 64,
+            **notes,
             **opponents.env_params(),
         },
-        grader_params={"reward": "placement", "hands_left": GAME_HANDS - hand},
+        grader_params={"reward": "placement", "hands_left": GAME_HANDS - hand}
+        | ({"ledger_weight": LEDGER_WEIGHT} if ledger else {}),
     )
 
 
+def ledger_hand_task(seed: int, policy_seat: int, opponents: Opponents, seats: int = SEATS) -> Task:
+    """A fresh first hand scored on chips, with the ledger graded too. Half start from a blank scratchpad, as every
+    arena game does, so the model has to write the layout from memory; half start from the empty layout, which
+    shows it what to write. The blank half only starts paying once the layout has been learned from the rest."""
+    rng = random.Random(f"ledger:{seed}")
+    shown = rng.random() < 0.5
+    notes = {"starting_ledger": starting_ledger(rng, [START_STACK] * seats, 1, policy_seat)} if shown else {}
+    return hand_task(seed, policy_seat, opponents, seats, notes, {"ledger_weight": LEDGER_WEIGHT})
+
+
 def placement_tasks(
-    count: int, base_seed: int, opponents: Opponents, seats: int = SEATS, midgame_share: float = 0.5
+    count: int,
+    base_seed: int,
+    opponents: Opponents,
+    seats: int = SEATS,
+    midgame_share: float = 0.5,
+    ledger: bool = False,
 ) -> list[Task]:
     """`midgame_share` of the tasks are mid-game hands scored on finishing place; the rest are the usual fresh
     first hands scored on chips, where the two rewards agree. Mixing them is safe for GRPO: an advantage only
-    compares attempts at the same task."""
+    compares attempts at the same task. With `ledger`, every task also grades the seat ledger."""
     rng = random.Random(f"placement:{base_seed}")
     tasks = []
     for i in range(count):
         seed, midgame = rng.getrandbits(48), rng.random() < midgame_share
-        tasks.append((midgame_task if midgame else hand_task)(seed, i % seats, opponents, seats))
+        if midgame:
+            tasks.append(midgame_task(seed, i % seats, opponents, seats, ledger))
+        else:
+            tasks.append((ledger_hand_task if ledger else hand_task)(seed, i % seats, opponents, seats))
     return tasks
 
 
-def placement_datasets(prefix: str, opponents: Opponents, seats: int = SEATS) -> dict[str, list[Task]]:
+def placement_datasets(
+    prefix: str, opponents: Opponents, seats: int = SEATS, ledger: bool = False
+) -> dict[str, list[Task]]:
     """The same splits as `datasets`, on their own deals, for training on finishing place. Use a prefix of its own
     (say `pokerbots-place`) so `rl/train.py --prefix` picks them up."""
-    return {f"{prefix}-{split}": placement_tasks(n, seed, opponents, seats) for split, (n, seed) in SPLITS.items()}
+    return {
+        f"{prefix}-{split}": placement_tasks(n, seed, opponents, seats, ledger=ledger)
+        for split, (n, seed) in SPLITS.items()
+    }
 
 
 def table_smoke_tasks(seats: int = SEATS) -> list[Task]:

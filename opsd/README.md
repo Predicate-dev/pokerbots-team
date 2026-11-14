@@ -90,3 +90,19 @@ When the dataset checks pass, rerun the builder without `--dry-run` and use the 
 Compare the checkpoint on fresh full-game seeds with the official prompt. Keep all decisions and cleanup turns
 from a source game in the same split. Replay identities and unrevealed hole cards can inform offline analysis and
 should stay out of model inputs and hints.
+
+## Build from gateway traces (no eval needed)
+
+Every request a deployment answers is recorded at the inference gateway with its prompt and reply, whoever sent it.
+[`build_from_gateway.py`](build_from_gateway.py) builds the same hinted dataset from those records, so decisions the
+base deployment made in arena games and in local games (`harness/play_local.py`, `harness/score_local.py`) can be
+used without running an AC2 eval through the harness relay.
+
+```bash
+uv run python opsd/build_from_gateway.py --deployment-id <infer_...> --dataset pokerbots-opsd-tight            # dry run
+uv run python opsd/build_from_gateway.py --deployment-id <infer_...> --dataset pokerbots-opsd-tight --upload
+```
+
+It keeps the same decisions as `build_dataset.py` (one `submit_action` call, under the token cap) and skips
+scratchpad turns and non-poker requests. Use the base deployment's id only: offline OPSD replays the base model's
+own tokens. `--since <UTC time>` limits it to recent requests.

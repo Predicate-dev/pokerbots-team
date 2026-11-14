@@ -79,6 +79,81 @@ def hand_tasks(count: int, base_seed: int, opponents: Opponents, seats: int = SE
     return [hand_task(rng.getrandbits(48), i % seats, opponents, seats) for i in range(count)]
 
 
+# Mid-game tasks for the placement reward. The arena rates a game on finishing place, which only differs from chips
+# once stacks are uneven and the end is near, so these tasks drop the policy into one hand of a 30-hand game with
+# made-up stacks and score it on the change in its expected finishing place (harness `grading.py`, `placement.py`).
+GAME_HANDS = 30
+START_STACK = 200
+STACK_DRIFT = 18.0  # chips a stack drifts per hand played (about 9 BB), for making up mid-game stacks
+LATE_FROM = 24  # the last orbit and a bit: half of all mid-game tasks start here or later
+
+
+def midgame_stacks(rng: random.Random, seats: int, hand: int, policy_seat: int) -> list[int]:
+    """Made-up stacks for the start of `hand`: each seat has drifted from 200 for `hand - 1` hands, some opponents
+    are out (more of them later in the game), and the chips still add up to 200 a seat. The policy seat always has
+    chips and at least one opponent does. A stand-in until you sample real stacks from arena game logs."""
+    spread = STACK_DRIFT * (hand - 1) ** 0.5
+    raw = [max(0.0, rng.gauss(START_STACK, spread)) for _ in range(seats)]
+    for seat in range(seats):
+        if seat != policy_seat and rng.random() < 0.08 * (hand - 1) / GAME_HANDS:
+            raw[seat] = 0.0
+    if sum(stack > 0 for stack in raw) < 2 or raw[policy_seat] < 4:
+        return midgame_stacks(rng, seats, hand, policy_seat)
+    total = START_STACK * seats
+    stacks = [int(stack * total / sum(raw)) for stack in raw]
+    stacks[max(range(seats), key=stacks.__getitem__)] += total - sum(stacks)  # rounding goes to the biggest stack
+    return stacks
+
+
+def midgame_task(seed: int, policy_seat: int, opponents: Opponents, seats: int = SEATS) -> Task:
+    """One hand from the middle of a 30-hand game, scored on finishing place. The hand number and stacks depend
+    only on `seed`. The model sees "Hand N of 30" and the real stacks; its scratchpad still starts blank."""
+    rng = random.Random(f"midgame:{seed}")
+    hand = rng.randint(LATE_FROM, GAME_HANDS) if rng.random() < 0.5 else rng.randint(2, LATE_FROM - 1)
+    return Task(
+        input=[
+            Message(
+                role="user",
+                content=f"Play hand {hand} of a {GAME_HANDS}-hand game of {seats}-seat no-limit hold'em "
+                f"from seat {policy_seat}.",
+            )
+        ],
+        env_params=TABLE_RULES
+        | {
+            "seed": seed,
+            "seats": seats,
+            "starting_stacks": midgame_stacks(rng, seats, hand, policy_seat),
+            "first_hand": hand,
+            "play_hands": 1,
+            "policy_seats": [policy_seat],
+            "ev_labels": True,
+            "ev_runouts": 64,
+            **opponents.env_params(),
+        },
+        grader_params={"reward": "placement", "hands_left": GAME_HANDS - hand},
+    )
+
+
+def placement_tasks(
+    count: int, base_seed: int, opponents: Opponents, seats: int = SEATS, midgame_share: float = 0.5
+) -> list[Task]:
+    """`midgame_share` of the tasks are mid-game hands scored on finishing place; the rest are the usual fresh
+    first hands scored on chips, where the two rewards agree. Mixing them is safe for GRPO: an advantage only
+    compares attempts at the same task."""
+    rng = random.Random(f"placement:{base_seed}")
+    tasks = []
+    for i in range(count):
+        seed, midgame = rng.getrandbits(48), rng.random() < midgame_share
+        tasks.append((midgame_task if midgame else hand_task)(seed, i % seats, opponents, seats))
+    return tasks
+
+
+def placement_datasets(prefix: str, opponents: Opponents, seats: int = SEATS) -> dict[str, list[Task]]:
+    """The same splits as `datasets`, on their own deals, for training on finishing place. Use a prefix of its own
+    (say `pokerbots-place`) so `rl/train.py --prefix` picks them up."""
+    return {f"{prefix}-{split}": placement_tasks(n, seed, opponents, seats) for split, (n, seed) in SPLITS.items()}
+
+
 def table_smoke_tasks(seats: int = SEATS) -> list[Task]:
     """Two 3-hand tables where the evaluated model plays every seat: no opponent endpoint needed."""
     rng = random.Random(6_650_005)

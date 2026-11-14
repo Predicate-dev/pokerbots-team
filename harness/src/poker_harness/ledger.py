@@ -8,6 +8,8 @@ the only text a team controls at the event, those lines are also where standing 
     LEDGER v1 | after hand 26 of 30 | me seat3
     GOAL ...
     KEY ...
+    MODES ...
+    MODE small through hand 30
     seat0 stack 155 | n26 vp9 pr6 3b1 ab7 pc4 fd5 sd2 | open 5,5,6 || tight, folds to raises
     seat2 out
     seat3 stack 218 (me) | n26 vp8 pr7 3b1 ab6 pc2 fd3 sd1 | open 5,5,5 || shown AKo once
@@ -15,7 +17,8 @@ the only text a team controls at the event, those lines are also where standing 
 
 Everything before `||` on a seat line is public arithmetic, so `update` can compute the right answer from a
 finished hand and `accuracy` can grade a model's ledger against it (`grading.py`, `grader_params.ledger_weight`).
-Everything after `||`, and every other line, belongs to the model and is never graded.
+Everything after `||`, and every other line, belongs to the model and is never graded. The MODE line names the
+persona in play (`persona.py`); it also has one right answer, graded on its own (`grader_params.persona_weight`).
 
 Counters, each from what every seat can see:
     n   hands the seat was dealt into
@@ -35,6 +38,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from .persona import MODES, RULE, next_mode
+
 VERSION = "LEDGER v1"
 COUNTERS = ("n", "vp", "pr", "3b", "ab", "pc", "fd", "sd")
 MAX_OPENS = 3
@@ -49,6 +54,7 @@ KEY = (
 )
 
 _HEADER = re.compile(rf"{re.escape(VERSION)}\s*\|\s*after hand (\d+) of (\d+)\s*\|\s*me (\w+)")
+_MODE = re.compile(rf"^\s*MODE ({'|'.join(MODES)}) through hand (\d+)\s*$")
 _SEAT = re.compile(
     r"^\s*(?P<name>seat\d+)\s+(?:(?P<out>out)\b.*|stack (?P<stack>\d+)(?: \(me\))?\s*\|\s*"
     + r"\s+".join(rf"{re.escape(c)}(?P<c{i}>\d+)" for i, c in enumerate(COUNTERS))
@@ -71,10 +77,14 @@ class Ledger:
     me: str
     seats: dict[str, SeatLine]
     notes: list[str] = field(default_factory=list)  # the model's own lines, kept as they are
+    mode: str | None = None  # the persona in play (`persona.py`), and the last hand it is held for
+    mode_through: int = 0
 
 
 def render(ledger: Ledger) -> str:
-    lines = [f"{VERSION} | after hand {ledger.hand} of {ledger.total} | me {ledger.me}", GOAL, KEY]
+    lines = [f"{VERSION} | after hand {ledger.hand} of {ledger.total} | me {ledger.me}", GOAL, KEY, RULE]
+    if ledger.mode:
+        lines.append(f"MODE {ledger.mode} through hand {ledger.mode_through}")
     for name, seat in ledger.seats.items():
         if seat.stack <= 0:
             lines.append(f"{name} out")
@@ -97,7 +107,10 @@ def parse(text: str) -> Ledger | None:
     ledger = Ledger(int(header[1]), int(header[2]), header[3], {})
     for line in text[header.end() :].splitlines():
         match = _SEAT.match(line)
-        if match and match["name"] not in ledger.seats:
+        mode = _MODE.match(line)
+        if mode and ledger.mode is None:
+            ledger.mode, ledger.mode_through = mode[1], int(mode[2])
+        elif match and match["name"] not in ledger.seats:
             if match["out"]:
                 ledger.seats[match["name"]] = SeatLine()
                 continue
@@ -105,21 +118,33 @@ def parse(text: str) -> Ledger | None:
             counts = {c: int(match[f"c{i}"]) for i, c in enumerate(COUNTERS)}
             note = (match["note"] or "").strip()
             ledger.seats[match["name"]] = SeatLine(int(match["stack"]), counts, opens, note)
-        elif line.strip() and not line.startswith(("GOAL", "KEY")):
+        elif line.strip() and not line.startswith(("GOAL", "KEY", "MODES")):
             ledger.notes.append(line)
     return ledger
 
 
 def from_params(params: dict[str, Any]) -> Ledger:
     """A ledger from a task's `env_params.starting_ledger`: {"hand", "total", "me", "seats": {name: {"stack", the
-    counters, "open": [...], "note"}}, "notes": [...]}. Missing counters are 0; a stack of 0 is a seat that is out."""
+    counters, "open": [...], "note"}}, "notes": [...], "mode": {"name", "through"}}. Missing counters are 0; a stack
+    of 0 is a seat that is out; without "mode" there is no MODE line."""
     seats = {}
     for name, row in params["seats"].items():
         counts = {c: int(row.get(c, 0)) for c in COUNTERS}
         opens = [int(size) for size in row.get("open", [])][-MAX_OPENS:]
         seats[name] = SeatLine(int(row.get("stack", 0)), counts, opens, str(row.get("note", "")))
     notes = [str(line) for line in params.get("notes", [])]
-    return Ledger(int(params["hand"]), int(params["total"]), str(params["me"]), seats, notes)
+    mode = params.get("mode") or {}
+    if mode and mode.get("name") not in MODES:
+        raise ValueError(f"starting_ledger.mode.name must be one of {MODES}")
+    return Ledger(
+        int(params["hand"]),
+        int(params["total"]),
+        str(params["me"]),
+        seats,
+        notes,
+        mode.get("name"),
+        int(mode.get("through", 0)),
+    )
 
 
 def to_params(ledger: Ledger) -> dict[str, Any]:
@@ -133,12 +158,15 @@ def to_params(ledger: Ledger) -> dict[str, Any]:
         if seat.note:
             seats[name]["note"] = seat.note
     out: dict[str, Any] = {"hand": ledger.hand, "total": ledger.total, "me": ledger.me, "seats": seats}
+    if ledger.mode:
+        out["mode"] = {"name": ledger.mode, "through": ledger.mode_through}
     return out | ({"notes": list(ledger.notes)} if ledger.notes else {})
 
 
 def update(prior: Ledger | None, hand: dict[str, Any], me: str, total: int) -> Ledger:
     """The ledger after `hand` (a game log's hand record): `prior` with this hand's public actions added. Without a
-    usable `prior` every seat starts from zero. Notes and reads carry over untouched."""
+    usable `prior` every seat starts from zero. Notes and reads carry over untouched. The MODE line is kept while
+    its block lasts and otherwise drawn from `me`'s first hole card this hand (`persona.next_mode`)."""
     names = list(hand["ending_stacks"])
     carried = prior is not None and prior.me == me
     seats = {}
@@ -181,7 +209,10 @@ def update(prior: Ledger | None, hand: dict[str, Any], me: str, total: int) -> L
     for name in names:
         seats[name].stack = hand["ending_stacks"][name]
     notes = list(prior.notes) if carried else []
-    return Ledger(hand["hand_number"], total, me, seats, notes)
+    held = (prior.mode, prior.mode_through) if carried else (None, 0)
+    hole = hand["starting_state"].get(me, {}).get("hole_cards") or []
+    mode, through = next_mode(*held, hand["hand_number"], hole)
+    return Ledger(hand["hand_number"], total, me, seats, notes, mode, through)
 
 
 def accuracy(text: str, reference: Ledger) -> float:

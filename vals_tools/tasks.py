@@ -9,6 +9,7 @@ play the same deals and can be compared hand by hand.
 from __future__ import annotations
 
 import random
+import zlib
 from dataclasses import dataclass
 from typing import Any
 
@@ -225,6 +226,48 @@ def placement_datasets(
         f"{prefix}-{split}": placement_tasks(n, seed, opponents, seats, ledger=ledger)
         for split, (n, seed) in SPLITS.items()
     }
+
+
+# Snapshots: spots cut from finished games by `harness/cut_snapshots.py`, one hand each, with the game's real
+# stacks, button and deal, and the seat ledger a perfect note-taker would have had by then.
+SNAPSHOT_SETTINGS = ("seed", "seats", "starting_stacks", "first_hand", "play_hands", "button_seat", "policy_seats")
+SELECT_ONE_GAME_IN = 10
+
+
+def snapshot_task(spot: dict[str, Any], opponents: Opponents, ledger: bool = True) -> Task:
+    """One hand of a real game, replayed from its snapshot and scored on finishing place. With `ledger` the
+    scratchpad starts as that game's ledger (blank on a first hand, as in the arena) and its update is graded."""
+    hand, game_hands = spot["first_hand"], spot["first_hand"] + spot["hands_left"]
+    notes = {"starting_ledger": spot["starting_ledger"]} if ledger and spot.get("starting_ledger") else {}
+    return Task(
+        input=[
+            Message(
+                role="user",
+                content=f"Play hand {hand} of a {game_hands}-hand game of {spot['seats']}-seat no-limit hold'em "
+                f"from seat {spot['policy_seats'][0]}.",
+            )
+        ],
+        env_params=TABLE_RULES
+        | {key: spot[key] for key in SNAPSHOT_SETTINGS}
+        | {"ev_labels": True, "ev_runouts": 64, **notes, **opponents.env_params()},
+        grader_params={"reward": "placement", "hands_left": spot["hands_left"]}
+        | ({"ledger_weight": LEDGER_WEIGHT} if ledger else {}),
+    )
+
+
+def snapshot_datasets(
+    prefix: str, spots: list[dict[str, Any]], opponents: Opponents, ledger: bool = True
+) -> dict[str, list[Task]]:
+    """`<prefix>-train` and `<prefix>-select` from snapshots. A game's hands all go to the same split (about one
+    game in ten to select), so a checkpoint is never picked on hands from a game it trained on. Order is shuffled,
+    the same way every time, so a training step mixes games."""
+    built: dict[str, list[Task]] = {f"{prefix}-train": [], f"{prefix}-select": []}
+    for spot in spots:
+        held_out = zlib.crc32(str(spot["game_id"]).encode()) % SELECT_ONE_GAME_IN == 0
+        built[f"{prefix}-select" if held_out else f"{prefix}-train"].append(snapshot_task(spot, opponents, ledger))
+    for tasks in built.values():
+        random.Random(0).shuffle(tasks)
+    return built
 
 
 def table_smoke_tasks(seats: int = SEATS) -> list[Task]:

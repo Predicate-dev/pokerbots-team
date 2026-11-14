@@ -72,6 +72,28 @@ uv run python rl/train.py --prefix pokerbots-ledger --dry-run
 - The blank-start hands score 0 on the ledger until the model has learned the layout from the seeded ones, so
   expect them to contribute nothing at first.
 
+## Training on hands from real games
+
+The spots above are made up. Snapshots are cut from games that were really played: each one is a single hand with
+that game's stacks, button and deal, and the seat ledger a perfect note-taker would have had by then.
+
+```bash
+cd harness && uv run python play_local.py --model vals-hackathon/<deployment>     # play full games; logs go to runs/
+cd harness && uv run python cut_snapshots.py                                     # runs/*.json -> runs/snapshots.jsonl
+uv run python rl/make_dataset.py --snapshots harness/runs/snapshots.jsonl --ledger --prefix pokerbots-real --dry-run
+uv run python rl/train.py --prefix pokerbots-real --dry-run
+```
+
+- A 30-hand, 6-seat game gives up to 180 snapshots (every seat, every hand). `--policy seat0` keeps one seat's,
+  `--min-hand 20` keeps the end of each game.
+- **This is what makes the ledger worth reading**, on one condition: the opponents you train against
+  (`--opponent-model`) have to be the models that played those games. Then a seat the ledger says folds to raises
+  really does, and acting on that pays. Against different opponents the stacks are still real but the counters
+  describe someone else.
+- A game's hands all go to `-train` or all to `-select` (about one game in ten), so cut at least a dozen games
+  before relying on `-select`. With fewer, `-select` may come out empty: train with `--no-eval`.
+- Opponents' scratchpads start blank in the replayed hand, whatever they had in the game.
+
 ## Run
 
 With the harness and connector running and the datasets uploaded:

@@ -43,14 +43,13 @@ from .completions import (
     table_rules,
     with_preset,
 )
-from .engine import ScriptedPlayer
 from .ev import label_ev
 from .game import play_session
 from .grading import GradingError, bounded, check_grader_params, failure_score, grade_log
 from .labels import label_folds
 from .prompts import TableRules, talk_fields
 from .seat import ModelSeat
-from .training import SCRIPTED, TrainingSetupError, opponent_specs, spec_params, table_start
+from .training import TrainingSetupError, opponent_specs, scripted_player, spec_params, table_start
 
 logger = logging.getLogger("poker_harness.server")
 
@@ -292,7 +291,7 @@ def create_app(
                 ]
                 for i, spec in specs.items():  # `env_params.opponent_seats`: scripted players and per-seat models
                     if isinstance(spec, str):
-                        players[i] = ScriptedPlayer(f"seat{i}", spec.removeprefix(SCRIPTED), int(params["seed"]))
+                        players[i] = scripted_player(f"seat{i}", spec, int(params["seed"]))
                         continue
                     theirs = spec_params(params, spec)
                     api = responses_completion if theirs.get("opponent_api") == "responses" else relay_completion

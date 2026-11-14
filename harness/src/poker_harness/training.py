@@ -34,11 +34,21 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from .engine.scripted import ARCHETYPES
+from .engine.scripted import ARCHETYPES as ENGINE_ARCHETYPES
+from .engine.scripted import ScriptedPlayer
+from .house_bots import HOUSE_STYLES, HouseStylePlayer
 from .prompts import TableRules
 
 START_KEYS = ("initial_stacks", "first_hand", "last_hand", "button_seat", "initial_scratchpad")
 SCRIPTED = "scripted:"
+# Every scripted style a seat can name: the engine's four archetypes and the house-bot imitations (`house_bots.py`).
+ARCHETYPES = (*ENGINE_ARCHETYPES, *HOUSE_STYLES)
+
+
+def scripted_player(name: str, spec: str, seed: int) -> ScriptedPlayer | HouseStylePlayer:
+    """The scripted seat a checked `"scripted:<style>"` spec names."""
+    style = spec.removeprefix(SCRIPTED)
+    return HouseStylePlayer(name, style, seed) if style in HOUSE_STYLES else ScriptedPlayer(name, style, seed)
 SPEC_KEYS = frozenset({"model", "persona", "api", "reasoning_effort", "thinking"})
 MAX_PERSONA_CHARS = 2000
 

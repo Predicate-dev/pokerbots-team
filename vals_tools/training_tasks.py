@@ -242,3 +242,69 @@ def mixed_table_tasks(
         mix = opponent_mix(rng, seat, seats, scripted_share, persona_share)
         tasks.append(mixed_table_task(seed, seat, opponents, hands, mix, seats))
     return tasks
+
+
+# The scripted imitations of the arena's six house bots (harness/src/poker_harness/house_bots.py).
+HOUSE_STYLES = ("house_alice", "house_bob", "house_stan", "house_carlos", "house_pete", "house_tim")
+
+
+def house_table_task(
+    seed: int, policy_seat: int, opponents: Opponents, first_hand: int, hands: int, stacks: list[int] | None,
+    lineup: dict[str, str], placement: bool,
+) -> Task:
+    """Hands `first_hand`..`first_hand + hands - 1` of a 30-hand game against scripted house-bot imitations. Every
+    opponent seat is scripted, so the task makes no opponent calls. Graded on finishing place (`placement`) or on EV
+    summed over its hands."""
+    if not 1 <= hands <= MAX_TASK_HANDS:
+        raise ValueError(f"hands must be 1-{MAX_TASK_HANDS}")
+    last_hand = min(GAME_HANDS, first_hand + hands - 1)
+    seats = len(lineup) + 1
+    params: dict[str, Any] = {
+        "seed": seed,
+        "seats": seats,
+        "total_hands": GAME_HANDS,
+        "first_hand": first_hand,
+        "last_hand": last_hand,
+        "policy_seats": [policy_seat],
+        "opponent_seats": lineup,
+        **opponents.env_params(),
+    }
+    if stacks is not None:
+        params["initial_stacks"] = stacks
+    if not placement:
+        params |= {"ev_labels": True, "ev_runouts": 64}
+    return Task(
+        input=[
+            Message(
+                role="user",
+                content=f"Play hands {first_hand}-{last_hand} of a {seats}-seat no-limit hold'em game from seat "
+                f"{policy_seat}.",
+            )
+        ],
+        env_params=TABLE_RULES | params,
+        grader_params={"reward": "placement"} if placement else {"reward": "ev", "ev_unit_bb": last_hand - first_hand + 1},
+    )
+
+
+def house_table_tasks(
+    count: int, base_seed: int, opponents: Opponents, hands: int = 1, placement: bool = False, seats: int = SEATS
+) -> list[Task]:
+    """Windows of event games against the house-bot imitations. A third start on hand 1 with full stacks; the rest
+    start mid-game with uneven stacks (and sometimes busted seats). Each table seats five of the six styles in a
+    seeded order; the policy seat cycles through every seat."""
+    if seats != SEATS:
+        raise ValueError("house tables are 6-max")
+    rng = random.Random(base_seed)
+    tasks = []
+    for i in range(count):
+        seat = i % seats
+        seed = rng.getrandbits(48)
+        styles = rng.sample(HOUSE_STYLES, seats - 1)
+        lineup = {str(s): f"scripted:{style}" for s, style in zip([x for x in range(seats) if x != seat], styles)}
+        if rng.random() < 1 / 3:
+            first_hand, stacks = 1, None
+        else:
+            first_hand = rng.randint(2, GAME_HANDS - hands + 1)
+            stacks = endgame_stacks(rng, seat, seats)
+        tasks.append(house_table_task(seed, seat, opponents, first_hand, hands, stacks, lineup, placement))
+    return tasks

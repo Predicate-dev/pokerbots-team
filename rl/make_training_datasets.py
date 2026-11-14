@@ -48,14 +48,15 @@ from vals_tools.tasks import SEATS, Opponents  # noqa: E402
 from vals_tools.training_tasks import (  # noqa: E402
     MAX_TASK_HANDS,
     endgame_tasks,
+    house_table_tasks,
     mixed_table_tasks,
     strong_hand_tasks,
 )
 
-FAMILIES = ("strong", "endgame", "mixed")
+FAMILIES = ("strong", "endgame", "mixed", "house")
 # (train tasks, select tasks) per family, and base seeds no official split uses.
-DEFAULT_COUNTS = {"strong": (2000, 500), "endgame": (1000, 250), "mixed": (1000, 250)}
-BASE_SEEDS = {"strong": (7_710_001, 7_720_002), "endgame": (7_730_003, 7_740_004), "mixed": (7_750_005, 7_760_006)}
+DEFAULT_COUNTS = {"strong": (2000, 500), "endgame": (1000, 250), "mixed": (1000, 250), "house": (1500, 300)}
+BASE_SEEDS = {"strong": (7_710_001, 7_720_002), "endgame": (7_730_003, 7_740_004), "mixed": (7_750_005, 7_760_006), "house": (7_770_007, 7_780_008)}
 
 
 def build(args: argparse.Namespace) -> dict[str, list]:
@@ -75,6 +76,8 @@ def build(args: argparse.Namespace) -> dict[str, list]:
                 tasks = strong_hand_tasks(count, seed, opponents, args.min_chen, args.weak_fraction, args.seats)
             elif family == "endgame":
                 tasks = endgame_tasks(count, seed, opponents, args.hands_left, args.chip_weight, args.seats)
+            elif family == "house":
+                tasks = house_table_tasks(count, seed, opponents, args.house_hands, args.house_placement, args.seats)
             else:
                 tasks = mixed_table_tasks(
                     count, seed, opponents, args.mixed_hands, args.scripted_share, args.persona_share, args.seats
@@ -104,6 +107,9 @@ def parser() -> argparse.ArgumentParser:
     g.add_argument("--mixed-hands", type=int, default=3, help=f"hands per task, 1-{MAX_TASK_HANDS} (default 3)")
     g.add_argument("--scripted-share", type=float, default=0.4, help="share of opponent seats that are scripted")
     g.add_argument("--persona-share", type=float, default=0.4, help="share that are persona-prompted models")
+    g = p.add_argument_group("house")
+    g.add_argument("--house-hands", type=int, default=1, help=f"hands per task, 1-{MAX_TASK_HANDS} (default 1)")
+    g.add_argument("--house-placement", action="store_true", help="grade on finishing place, not EV")
     p.add_argument("--upload", action="store_true", help="create the datasets on AC2 (default: print only)")
     p.add_argument("--dry-run", action="store_true", help="print only; this is the default")
     return p

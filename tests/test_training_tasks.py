@@ -171,9 +171,9 @@ def test_the_builder_prints_by_default_and_names_train_and_select_per_family(
     args = builder.parser().parse_args(["--count", "12", "--select-count", "6"])
     built = builder.build(args)
     assert list(built) == [
-        f"pokerbots-{family}-{split}" for family in ("strong", "endgame", "mixed") for split in ("train", "select")
+        f"pokerbots-{family}-{split}" for family in ("strong", "endgame", "mixed", "house") for split in ("train", "select")
     ]
-    assert [len(tasks) for tasks in built.values()] == [12, 6] * 3
+    assert [len(tasks) for tasks in built.values()] == [12, 6] * 4
     train, select = built["pokerbots-endgame-train"], built["pokerbots-endgame-select"]
     assert not {t.env_params["seed"] for t in train} & {t.env_params["seed"] for t in select}
 
@@ -197,3 +197,27 @@ def test_the_select_split_defaults_to_a_quarter_of_the_train_count_and_zero_mean
     assert [len(tasks) for tasks in built.values()] == [8, 2]
     built = builder.build(builder.parser().parse_args(["--family", "endgame", "--count", "4", "--select-count", "0"]))
     assert [len(tasks) for tasks in built.values()] == [4, 0]
+
+
+def test_house_tables_are_all_scripted_windows_of_a_30_hand_game() -> None:
+    from vals_tools.training_tasks import HOUSE_STYLES, house_table_tasks
+
+    tasks = house_table_tasks(60, 5, OPPONENT)
+    assert [t.env_params["policy_seats"] for t in tasks[:6]] == [[i] for i in range(6)]
+    fresh = 0
+    for task in tasks:
+        params = task.env_params
+        seat = params["policy_seats"][0]
+        lineup = params["opponent_seats"]
+        assert sorted(lineup) == [str(s) for s in range(6) if s != seat]
+        assert all(spec.removeprefix("scripted:") in HOUSE_STYLES for spec in lineup.values())
+        assert len(set(lineup.values())) == 5
+        assert params["total_hands"] == 30 and params["first_hand"] == params["last_hand"]
+        if "initial_stacks" in params:
+            assert sum(params["initial_stacks"]) == 1200 and params["initial_stacks"][seat] > 0
+        else:
+            fresh += params["first_hand"] == 1
+        assert task.grader_params == {"reward": "ev", "ev_unit_bb": 1}
+    assert 5 <= fresh <= 35
+    placed = house_table_tasks(6, 5, OPPONENT, hands=3, placement=True)
+    assert all(t.grader_params == {"reward": "placement"} and "ev_labels" not in t.env_params for t in placed)

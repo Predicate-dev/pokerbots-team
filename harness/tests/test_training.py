@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import httpx
@@ -447,3 +448,51 @@ def test_bad_grader_params_fail_the_grading(params: dict, message: str) -> None:
 def test_good_grader_params_pass() -> None:
     for params in ({}, {"reward": "ev"}, {"reward": "ev", "ev_unit_bb": 3}, {"reward": "placement", "chip_weight": 0.4}):
         assert check_grader_params(params) == params
+
+
+# -- house-bot imitations (`house_bots.py`) --------------------------------------------------------------------
+
+
+def test_house_styles_play_whole_games_and_talk() -> None:
+    from poker_harness.house_bots import HOUSE_STYLES, HouseStylePlayer
+
+    players = [HouseStylePlayer(f"seat{i}", style, 3) for i, style in enumerate(HOUSE_STYLES)]
+    log = asyncio.run(play_session("g", 3, players, EVENT))
+    assert log["complete"] and log["hands"]
+    assert sum(log["final_stacks"].values()) == 6 * EVENT.starting_stack
+    said = {a["say"] for hand in log["hands"] for a in hand["actions"] if a["say"]}
+    assert said, "the imitations should talk in character"
+
+
+def test_house_styles_match_their_measured_habits() -> None:
+    from poker_harness.house_bots import HOUSE_STYLES, HouseStylePlayer
+
+    played: dict[str, int] = dict.fromkeys(HOUSE_STYLES, 0)
+    raised: dict[str, int] = dict.fromkeys(HOUSE_STYLES, 0)
+    dealt: dict[str, int] = dict.fromkeys(HOUSE_STYLES, 0)
+    for seed in range(40):
+        players = [HouseStylePlayer(f"seat{i}", style, seed) for i, style in enumerate(HOUSE_STYLES)]
+        style_of = {p.name: p.style for p in players}
+        log = asyncio.run(play_session("g", seed, players, replace(EVENT, total_hands=1)))
+        hand = log["hands"][0]
+        for name in hand["starting_state"]:
+            dealt["house_" + style_of[name]] += 1
+        pre = [a for a in hand["actions"] if a["street"] == "preflop"]
+        for name in {a["player"] for a in pre if a["action"]["type"] in ("call", "bet", "raise")}:
+            played["house_" + style_of[name]] += 1
+        for name in {a["player"] for a in pre if a["action"]["type"] in ("bet", "raise")}:
+            raised["house_" + style_of[name]] += 1
+    assert played["house_alice"] <= 0.15 * dealt["house_alice"]  # folds almost everything
+    assert raised["house_stan"] == 0  # never raises
+    assert raised["house_bob"] >= 0.25 * dealt["house_bob"]  # shoves a lot
+    assert played["house_carlos"] > played["house_alice"]
+
+
+def test_opponent_seats_accepts_house_styles() -> None:
+    from poker_harness.training import opponent_specs, scripted_player
+    from poker_harness.house_bots import HouseStylePlayer
+
+    specs = opponent_specs({"opponent_seats": {"1": "scripted:house_bob", "2": "scripted:nit"}}, 6, {0})
+    assert specs == {1: "scripted:house_bob", 2: "scripted:nit"}
+    assert isinstance(scripted_player("seat1", specs[1], 5), HouseStylePlayer)
+    assert isinstance(scripted_player("seat2", specs[2], 5), ScriptedPlayer)

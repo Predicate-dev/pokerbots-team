@@ -1,7 +1,10 @@
 """Snapshots cut from a finished game replay each hand exactly as the game dealt it, with the ledger a perfect
 note-taker would have had."""
 
+import json
+import sys
 import zlib
+from pathlib import Path
 
 import pytest
 from test_official_rules import OFFICIAL, bot, last_user, seats, submit
@@ -11,6 +14,9 @@ from poker_harness.game import play_session
 from poker_harness.ledger import from_params, parse, render, to_params, update
 from poker_harness.prompts import TableRules
 from poker_harness.snapshots import snapshots
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import cut_snapshots
 
 GAME = TableRules(**{**OFFICIAL.__dict__, "seats": 4, "play_hands": 10})  # the first 10 hands of a 30-hand game
 
@@ -104,3 +110,23 @@ async def test_a_button_seat_that_is_not_at_the_table_is_refused() -> None:
     rules = TableRules(**{**OFFICIAL.__dict__, "seats": 4, "button_seat": 7})
     with pytest.raises(ValueError):
         await play_session("g", 1, table(rules), rules)
+
+
+async def test_the_command_line_tool_writes_one_line_per_snapshot_and_skips_what_it_cannot_use(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    log = await game()
+    (tmp_path / "game_a.json").write_text(json.dumps(log | {"game_id": None}))
+    (tmp_path / "one_hand.json").write_text(json.dumps(log | {"hands": log["hands"][:1]}))  # a training rollout
+    (tmp_path / "not_a_log.json").write_text(json.dumps({"hands": [{}] * 9}))
+    out = tmp_path / "out" / "snapshots.jsonl"
+    cut_snapshots.main([*map(str, sorted(tmp_path.glob("*.json"))), "--out", str(out), "--policy", "seat0"])
+    lines = [json.loads(line) for line in out.read_text().splitlines()]
+    # A log without an id is named after its file, so its hands can be kept together when datasets are split.
+    assert len(lines) == 10 and lines == [s | {"game_id": "game_a"} for s in snapshots(log, policy=["seat0"])]
+    printed = capsys.readouterr().out
+    assert '"games": 1' in printed and '"skipped: too few hands": 1' in printed and '"skipped: KeyError": 1' in printed
+    assert "wrote 10 snapshots from 1 games" in printed
+
+    cut_snapshots.main([str(tmp_path / "one_hand.json"), "--out", str(tmp_path / "none.jsonl")])
+    assert not (tmp_path / "none.jsonl").exists() and "no snapshots" in capsys.readouterr().out

@@ -108,6 +108,8 @@ def main() -> None:
     args = parser().parse_args()
     if args.upload and args.dry_run:
         raise SystemExit("--upload and --dry-run can't be combined")
+    if args.chip_weight is not None and not 0 <= args.chip_weight <= 1:
+        raise SystemExit("--chip-weight must be from 0 to 1")
     built = build(args)
     for name, tasks in built.items():
         sample = {"env_params": tasks[0].env_params, "grader_params": tasks[0].grader_params} if tasks else {}

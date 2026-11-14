@@ -253,6 +253,19 @@ async def test_a_bad_training_key_fails_the_rollout_with_its_name(tmp_path: Path
     assert outputs["log"] is None
 
 
+async def test_a_bad_grader_param_fails_the_rollout_before_any_hand(tmp_path: Path) -> None:
+    relay_requests: list[dict] = []
+    app = create_app(relay_transport=httpx.ASGITransport(app=fake_relay(relay_requests)), runs_dir=tmp_path)
+    task = {
+        "input": [],
+        "env_params": {"preset": "event", "seed": 1},
+        "grader_params": {"reward": "placement", "chip_weight": 25},
+    }
+    status, outputs = await play(app, task)
+    assert status["status"] == "failed" and "grader_params.chip_weight must be a number" in status["error_message"]
+    assert outputs["log"] is None and relay_requests == []
+
+
 # --- an endgame task, end to end: prompts, scratchpad, placement reward ----------------------------------------
 
 

@@ -60,6 +60,9 @@ MAX_OUTPUT_BYTES = 900_000  # the connector rejects upstream responses over 1 Mi
 class HarnessTask(BaseModel):
     input: list[Any]
     env_params: dict[str, Any] | None = None
+    # Checked before the table starts when AC2 sends it here, so a bad reward setting fails in seconds, not after
+    # the whole game; grading checks it again either way.
+    grader_params: dict[str, Any] | None = None
 
 
 class SubmitRequest(BaseModel):
@@ -235,6 +238,7 @@ def create_app(
             params = params | {"submit_fields": talk_fields(params.get("submit_fields"))}
         rollout.status = "running"
         try:
+            check_grader_params(request.task.grader_params)
             seats = int(params.get("seats", 10))
             policy = {int(i) for i in params.get("policy_seats", range(seats))}
             # Training-only setups (`training.py`): both are empty for a task that sets none of their keys.

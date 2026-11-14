@@ -47,6 +47,31 @@ uv run python rl/train.py --prefix pokerbots-place --dry-run
 - Restart the harness after pulling this change, and only between runs. The arena still plays the official rules:
   these settings exist only in training tasks.
 
+## Training the seat ledger
+
+The scratchpad is the model's only memory of a game, and the only text you control at the event. The seat ledger
+(`harness/.../ledger.py`) gives it a fixed layout: one line of counters per seat (hands dealt, how often the seat
+pays to play, raises, reraises, bets, calls, folds, showdowns, open sizes), plus two lines that say what the game
+is ranked on and how to update the counters. Everything after `||` on a line is the model's own read.
+
+```bash
+uv run python rl/make_dataset.py --placement --ledger --prefix pokerbots-ledger --dry-run
+uv run python rl/make_dataset.py --placement --ledger --prefix pokerbots-ledger
+uv run python rl/train.py --prefix pokerbots-ledger --dry-run
+```
+
+- **Mid-game hands start with a ledger in the scratchpad** (`env_params.starting_ledger`) that matches the table's
+  stacks and hand number. Half the fresh first hands start from the empty layout; the other half start blank, as
+  every arena game does, so the model has to write the layout from memory.
+- **2 of the 10 reward points go to the update** (`grader_params.ledger_weight`): after the hand, the harness works
+  out the correct ledger from what every seat saw and scores the share of facts the model's scratchpad gets right.
+  The rest of the score is the hand itself, on placement or chips as above.
+- **This teaches keeping the ledger, not reading it.** The seeded counters are made up and the training opponents
+  do not play to them, so nothing here rewards acting on a read. That needs tasks cut from real games, where the
+  counters describe how the seats really play.
+- The blank-start hands score 0 on the ledger until the model has learned the layout from the seeded ones, so
+  expect them to contribute nothing at first.
+
 ## Run
 
 With the harness and connector running and the datasets uploaded:

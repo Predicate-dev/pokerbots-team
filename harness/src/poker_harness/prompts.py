@@ -36,7 +36,13 @@ class TableRules:
       check if legal, else fold, instead of being mapped to the nearest legal action.
     - `scratchpad`: each seat keeps up to `scratchpad_chars` characters of private notes for the whole game, shown at
       the start of every hand and rewritten with `update_scratchpad` in a cleanup turn after each hand, whose replies
-      may use `cleanup_max_completion_tokens` (the event: 10,000)."""
+      may use `cleanup_max_completion_tokens` (the event: 10,000).
+
+    Training-only fields (the arena never sets them): a task can drop the model into the middle of a game.
+    - `starting_stacks`: each seat's chips at the first hand played, in seat order, instead of `starting_stack` for
+      everyone; a seat at 0 is already out. Needs carried stacks (`reset_stacks=False`).
+    - `first_hand`: the number of the first hand played, so the model sees "Hand 27 of 30".
+    - `play_hands`: stop after this many hands even if the game has more (None: play to `total_hands`)."""
 
     total_hands: int = 100
     small_blind: int = 1
@@ -51,6 +57,9 @@ class TableRules:
     scratchpad: bool = False
     scratchpad_chars: int = 5000
     cleanup_max_completion_tokens: int | None = None  # the cleanup turn's output cap; the event's is 10000
+    starting_stacks: tuple[int, ...] | None = None  # training only: a mid-game start
+    first_hand: int = 1
+    play_hands: int | None = None
 
 
 SYSTEM_PROMPT = """You are a professional poker player in a {seat_count}-seat no-limit Texas Hold'em game against other AI players.
@@ -262,9 +271,7 @@ def applied_action_text(action: dict[str, Any]) -> str:
     return f"{text} ({error})" if error else text
 
 
-def update_prompt(
-    ctx: DecisionContext, others: list[dict[str, Any]], note: str = "", talk: bool = False
-) -> str:
+def update_prompt(ctx: DecisionContext, others: list[dict[str, Any]], note: str = "", talk: bool = False) -> str:
     """A later user message in the same hand: what everyone else did since your last action, then the state."""
     return "\n".join(
         [

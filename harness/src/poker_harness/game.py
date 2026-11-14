@@ -126,13 +126,28 @@ async def play_session(
         raise ValueError(f"duplicate players at one table: {names}")
     by_seat = dict(enumerate(players))
     start = rules.starting_stack
-    stacks = dict.fromkeys(by_seat, start)
+    first = rules.first_hand
+    last = rules.total_hands if rules.play_hands is None else min(rules.total_hands, first + rules.play_hands - 1)
+    if rules.starting_stacks is None:
+        initial = dict.fromkeys(by_seat, start)
+    else:  # a mid-game start (training only): seats at 0 are already out
+        if rules.reset_stacks or len(rules.starting_stacks) != len(players) or min(rules.starting_stacks) < 0:
+            raise ValueError("starting_stacks needs carried stacks and one stack of 0 or more per seat")
+        if sum(s > 0 for s in rules.starting_stacks) < 2:
+            raise ValueError("starting_stacks needs at least two seats with chips")
+        initial = dict(enumerate(rules.starting_stacks))
+    if not 1 <= first <= rules.total_hands or last < first:
+        raise ValueError(f"first_hand {first} and play_hands {rules.play_hands} must fit in {rules.total_hands} hands")
+    stacks = dict(initial)
     net = dict.fromkeys(by_seat, 0)
     no_history = dict.fromkeys(by_seat, "")
     hands: list[dict[str, Any]] = []
-    eliminated: dict[str, int] = {}
+    # Seats already out at a mid-game start rank below every seat that busts later.
+    eliminated: dict[str, int] = {by_seat[s].name: first - 1 for s in by_seat if initial[s] == 0}
     start_time = datetime.now(UTC).isoformat()
     button = max(by_seat)
+    if stacks[button] == 0:  # only at a mid-game start: the button can't be on a seat that is out
+        button = _next_live_seat(button, stacks)
     official = rules.ranking is not None
     # Multi-hand talk tables without the after-hand turn: each seat's next hand opens with what it missed of the last.
     recap = rules.table_talk and not rules.scratchpad and rules.total_hands > 1
@@ -144,7 +159,7 @@ async def play_session(
             "hands": hands,
             "session_info": {
                 "player_names": names,
-                "starting_stacks": [start] * len(names),
+                "starting_stacks": [initial[s] for s in by_seat],
                 "small_blind": rules.small_blind,
                 "big_blind": rules.big_blind,
                 "seed": seed,
@@ -155,7 +170,7 @@ async def play_session(
                 "table_talk": rules.table_talk,
                 "history": "current_hand",
             },
-            "final_stacks": {by_seat[s].name: start + net[s] for s in by_seat},
+            "final_stacks": {by_seat[s].name: initial[s] + net[s] for s in by_seat},
             "eliminated_on_hand": dict(eliminated),
             "complete": complete,
         }
@@ -172,12 +187,12 @@ async def play_session(
             }
         return out
 
-    for hand_number in range(1, rules.total_hands + 1):
+    for hand_number in range(first, last + 1):
         if rules.reset_stacks:
             stacks = dict.fromkeys(by_seat, start)
         elif sum(s > 0 for s in stacks.values()) < 2:
             break
-        if hand_number > 1:
+        if hand_number > first:
             button = _next_live_seat(button, stacks)
         small_blind, big_blind = rules.small_blind, rules.big_blind
         stacks_before = {by_seat[s].name: stacks[s] for s in sorted(by_seat) if stacks[s] > 0}

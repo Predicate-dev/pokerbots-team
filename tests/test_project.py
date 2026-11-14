@@ -7,7 +7,7 @@ import pytest
 from ac2.runtime import FunctionCall, Message, Reasoning
 
 from vals_tools.score import summarize
-from vals_tools.tasks import GAME_HANDS, SPLITS, Opponents, datasets, placement_datasets
+from vals_tools.tasks import GAME_HANDS, SPLITS, Opponents, datasets, placement_datasets, snapshot_datasets
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / "opsd")]
@@ -73,6 +73,37 @@ def test_ledger_datasets_seed_a_ledger_that_matches_the_table_and_grade_its_upda
     assert all(t.env_params["starting_ledger"]["hand"] == 0 and "reward" not in t.grader_params for t in seeded)
     plain = placement_datasets("p-place", OPPONENT)["p-place-train"]
     assert not any("starting_ledger" in t.env_params or "ledger_weight" in (t.grader_params or {}) for t in plain)
+
+
+def test_snapshot_datasets_replay_real_hands_and_keep_each_game_in_one_split() -> None:
+    def spot(game: int, hand: int) -> dict:
+        ledger = {"hand": hand - 1, "total": 30, "me": "seat2", "seats": {"seat0": {"stack": 300}}}
+        return {
+            "game_id": f"game{game}",
+            "seed": 1000 + game,
+            "seats": 6,
+            "first_hand": hand,
+            "play_hands": 1,
+            "button_seat": hand % 6,
+            "starting_stacks": [300, 100, 200, 200, 0, 400],
+            "policy_seats": [2],
+            "hands_left": 30 - hand,
+        } | ({"starting_ledger": ledger} if hand > 1 else {})
+
+    spots = [spot(game, hand) for game in range(40) for hand in (1, 12, 30)]
+    built = snapshot_datasets("p-real", spots, OPPONENT)
+    train, select = built["p-real-train"], built["p-real-select"]
+    assert len(train) + len(select) == 120 and 0 < len(select) < len(train)
+    assert not {t.env_params["seed"] for t in train} & {t.env_params["seed"] for t in select}  # no game in both
+    assert [t.env_params["seed"] for t in train] != sorted(t.env_params["seed"] for t in train)  # games are mixed
+    for task in train + select:
+        params, hand = task.env_params, task.env_params["first_hand"]
+        assert params["preset"] == "event" and params["opponent_model"] == "my-project/opponent"
+        assert params["button_seat"] == hand % 6 and params["starting_stacks"] == [300, 100, 200, 200, 0, 400]
+        assert task.grader_params == {"reward": "placement", "hands_left": 30 - hand, "ledger_weight": 2}
+        assert ("starting_ledger" in params) == (hand > 1) and "game_id" not in params and "hands_left" not in params
+    plain = snapshot_datasets("p-real", spots, OPPONENT, ledger=False)["p-real-train"]
+    assert all("starting_ledger" not in t.env_params and "ledger_weight" not in t.grader_params for t in plain)
 
 
 def row(ev: float) -> dict:

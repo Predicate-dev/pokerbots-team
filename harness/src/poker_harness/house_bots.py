@@ -23,6 +23,7 @@ from .engine.table import Decision, DecisionContext
 from .spots import RANKS, chen_score
 
 HOUSE_STYLES = ("house_alice", "house_bob", "house_stan", "house_carlos", "house_pete", "house_tim")
+TALK_MODES = ("normal", "muted", "shuffled")
 
 TALK = {
     "alice": {"fold": ["oh no, sorry, i fold", "please do not raise me"], "play": ["oh no, i have to play this"]},
@@ -49,11 +50,16 @@ def _bob_range(hole_cards: list[str]) -> bool:
 class HouseStylePlayer:
     """One scripted house-bot imitation. Deterministic for a given (name, seed)."""
 
-    def __init__(self, name: str, style: str, seed: int = 0) -> None:
+    def __init__(self, name: str, style: str, seed: int = 0, *, talk_mode: str = "normal") -> None:
         if style not in HOUSE_STYLES:
             raise ValueError(f"unknown house style {style!r}")
+        if talk_mode not in TALK_MODES:
+            raise ValueError(f"unknown house talk mode {talk_mode!r}")
         self.name = name
         self.style = style.removeprefix("house_")
+        self.talk_mode = talk_mode
+        other_styles = [s for s in TALK if s != self.style]
+        self.voice = random.Random(f"voice:{name}:{seed}").choice(other_styles) if talk_mode == "shuffled" else self.style
         self.rng = random.Random(f"{name}:{style}:{seed}")
 
     # -- helpers -----------------------------------------------------------------------------------------------
@@ -117,8 +123,12 @@ class HouseStylePlayer:
 
     async def decide(self, ctx: DecisionContext, history: str) -> Decision:
         decision = self._choose(ctx)
-        lines = TALK[self.style]["fold" if decision.type in ("fold", "check") else "play"]
-        say = self.rng.choice(lines) if self.rng.random() < 0.6 else ""
+        situation = "fold" if decision.type in ("fold", "check") else "play"
+        lines = TALK[self.style][situation]
+        # Preserve the policy's RNG draws across talk modes so the same state produces the same betting behavior.
+        line = self.rng.randrange(len(lines)) if self.rng.random() < 0.6 else None
+        voice_lines = TALK[self.voice][situation]
+        say = "" if line is None or self.talk_mode == "muted" else voice_lines[line % len(voice_lines)]
         decision.model_response = {
             "model_name": self.name,
             "provider": "scripted",

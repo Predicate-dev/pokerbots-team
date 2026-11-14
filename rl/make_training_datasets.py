@@ -77,7 +77,9 @@ def build(args: argparse.Namespace) -> dict[str, list]:
             elif family == "endgame":
                 tasks = endgame_tasks(count, seed, opponents, args.hands_left, args.chip_weight, args.seats)
             elif family == "house":
-                tasks = house_table_tasks(count, seed, opponents, args.house_hands, args.house_placement, args.seats)
+                tasks = house_table_tasks(
+                    count, seed, opponents, args.house_hands, args.house_placement, args.seats, talk_mode=args.house_talk
+                )
             else:
                 tasks = mixed_table_tasks(
                     count, seed, opponents, args.mixed_hands, args.scripted_share, args.persona_share, args.seats
@@ -110,6 +112,8 @@ def parser() -> argparse.ArgumentParser:
     g = p.add_argument_group("house")
     g.add_argument("--house-hands", type=int, default=1, help=f"hands per task, 1-{MAX_TASK_HANDS} (default 1)")
     g.add_argument("--house-placement", action="store_true", help="grade on finishing place, not EV")
+    g.add_argument("--house-talk", choices=("normal", "muted", "shuffled"), default="normal",
+                   help="house opponents' table talk; shuffle or mute to train from betting patterns")
     p.add_argument("--upload", action="store_true", help="create the datasets on AC2 (default: print only)")
     p.add_argument("--dry-run", action="store_true", help="print only; this is the default")
     return p

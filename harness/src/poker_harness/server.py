@@ -46,6 +46,7 @@ from .completions import (
 from .ev import label_ev
 from .game import play_session
 from .grading import GradingError, bounded, check_grader_params, failure_score, grade_log
+from .house_bots import TALK_MODES
 from .labels import label_folds
 from .prompts import TableRules, talk_fields
 from .seat import ModelSeat
@@ -243,6 +244,9 @@ def create_app(
             # Training-only setups (`training.py`): both are empty for a task that sets none of their keys.
             start = table_start(params, rollout.rules, policy)
             specs = opponent_specs(params, seats, policy)
+            house_talk = params.get("house_talk", "normal")
+            if house_talk not in TALK_MODES:
+                raise TrainingSetupError(f"env_params.house_talk must be one of {TALK_MODES}")
             scripted_pads = sorted(i for i in start.scratchpads if isinstance(specs.get(i), str))
             if scripted_pads:  # scripted players keep no notes, so the scratchpad would be dropped
                 raise TrainingSetupError(f"env_params.initial_scratchpad: seats {scripted_pads} are scripted players")
@@ -291,7 +295,7 @@ def create_app(
                 ]
                 for i, spec in specs.items():  # `env_params.opponent_seats`: scripted players and per-seat models
                     if isinstance(spec, str):
-                        players[i] = scripted_player(f"seat{i}", spec, int(params["seed"]))
+                        players[i] = scripted_player(f"seat{i}", spec, int(params["seed"]), talk_mode=house_talk)
                         continue
                     theirs = spec_params(params, spec)
                     api = responses_completion if theirs.get("opponent_api") == "responses" else relay_completion

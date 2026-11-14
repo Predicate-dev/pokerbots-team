@@ -287,7 +287,8 @@ def house_table_task(
 
 
 def house_table_tasks(
-    count: int, base_seed: int, opponents: Opponents, hands: int = 1, placement: bool = False, seats: int = SEATS
+    count: int, base_seed: int, opponents: Opponents, hands: int = 1, placement: bool = False, seats: int = SEATS,
+    *, talk_mode: str = "normal",
 ) -> list[Task]:
     """Windows of event games against the house-bot imitations. A third start on hand 1 with full stacks; the rest
     start mid-game with uneven stacks (and sometimes busted seats). Each table seats five of the six styles in a
@@ -306,5 +307,8 @@ def house_table_tasks(
         else:
             first_hand = rng.randint(2, GAME_HANDS - hands + 1)
             stacks = endgame_stacks(rng, seat, seats)
-        tasks.append(house_table_task(seed, seat, opponents, first_hand, hands, stacks, lineup, placement))
+        task = house_table_task(seed, seat, opponents, first_hand, hands, stacks, lineup, placement)
+        if talk_mode != "normal":
+            task.env_params["house_talk"] = talk_mode
+        tasks.append(task)
     return tasks

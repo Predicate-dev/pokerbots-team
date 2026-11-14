@@ -45,10 +45,12 @@ SCRIPTED = "scripted:"
 ARCHETYPES = (*ENGINE_ARCHETYPES, *HOUSE_STYLES)
 
 
-def scripted_player(name: str, spec: str, seed: int) -> ScriptedPlayer | HouseStylePlayer:
+def scripted_player(name: str, spec: str, seed: int, *, talk_mode: str = "normal") -> ScriptedPlayer | HouseStylePlayer:
     """The scripted seat a checked `"scripted:<style>"` spec names."""
     style = spec.removeprefix(SCRIPTED)
-    return HouseStylePlayer(name, style, seed) if style in HOUSE_STYLES else ScriptedPlayer(name, style, seed)
+    if style in HOUSE_STYLES:
+        return HouseStylePlayer(name, style, seed, talk_mode=talk_mode)
+    return ScriptedPlayer(name, style, seed)
 SPEC_KEYS = frozenset({"model", "persona", "api", "reasoning_effort", "thinking"})
 MAX_PERSONA_CHARS = 2000
 

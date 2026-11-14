@@ -11,8 +11,9 @@
      Training refuses a transcript with tool calls unless the tools are listed here.
 3. Upload as a `hinted` dataset.
 
-Keep only clean decisions: exactly one `submit_action` call and a reply under the token cap. The after-hand
-`update_scratchpad` turns are skipped. Use train deals only.
+Keep only clean decisions: exactly one `submit_action` call and a reply under the token cap.
+`--opponent-reads` uses multi-hand train traces to distill evidence-based action guidance and includes clean
+`update_scratchpad` turns with separate cleanup guidance. By default the builder skips cleanup.
 
     uv run python opsd/build_dataset.py --eval eval_xxx --dataset pokerbots-opsd-train --dry-run
 """
@@ -29,45 +30,65 @@ from ac2.runtime import FunctionCall, HintedTask, HintMutation, HintSelection, I
 from ac2.sdk import Client
 from pydantic import TypeAdapter
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "harness" / "src"))
 from hint import HINT, SEPARATOR  # noqa: E402
+from poker_harness.opponent_reads import ACTION_GUIDANCE, CLEANUP_GUIDANCE, PLACEMENT_GUIDANCE  # noqa: E402
 
 ITEMS = TypeAdapter(list[Item])
 SUBMIT = "submit_action"
 SCRATCHPAD = "update_scratchpad"
+SCRATCHPAD_CHARS = 5_000
 # The tools every seat sees at an event table: submit_action (with `say`, since talk is on) and update_scratchpad.
 # They must match what the model saw, field for field; tools.json is generated from the harness and a harness test
 # checks it.
 TOOLS = [Tool.model_validate(tool).model_dump() for tool in json.loads((Path(__file__).parent / "tools.json").read_text())]
 
 
-def decision_tasks(trace: dict, hint: str, max_tokens: int) -> tuple[list[HintedTask], dict[str, int]]:
+def decision_tasks(
+    trace: dict, hint: str, max_tokens: int, *, cleanup_hint: str | None = None, cleanup_max_tokens: int = 10_000,
+) -> tuple[list[HintedTask], dict[str, int]]:
     """One task per clean policy decision in a trace, with counts of what was kept and why the rest was skipped."""
     spans = sorted(
         (s for s in trace["spans"] if s["name"] == "get_completion" and s["status"] == "OK"),
         key=lambda s: s["start_time"],
     )
     stats = {"decisions": len(spans), "kept": 0, "cleanup": 0, "format": 0, "truncated": 0}
+    if cleanup_hint is not None:
+        stats["cleanup_kept"] = 0
     tasks = []
     for span in spans:
         prompt = ITEMS.validate_json(span["input"])
         reply = ITEMS.validate_json(span["output"])
         calls = [item for item in reply if isinstance(item, FunctionCall)]
-        if calls and calls[0].name == SCRATCHPAD:  # the after-hand cleanup turn, not a poker decision
+        cleanup = bool(calls and calls[0].name == SCRATCHPAD)
+        if cleanup:
             stats["cleanup"] += 1
-            continue
-        if len(calls) != 1 or calls[0].name != SUBMIT:
+            if cleanup_hint is None:
+                continue
+        expected = SCRATCHPAD if cleanup else SUBMIT
+        if len(calls) != 1 or calls[0].name != expected:
             stats["format"] += 1
             continue
-        if int(span.get("tokens_out") or 0) >= max_tokens:
+        cap = cleanup_max_tokens if cleanup else max_tokens
+        if int(span.get("tokens_out") or 0) >= cap:
             stats["truncated"] += 1
             continue
+        if cleanup:
+            try:
+                args = json.loads(calls[0].arguments)
+            except (TypeError, ValueError):
+                args = None
+            contents = args.get("contents") if isinstance(args, dict) else None
+            if not isinstance(contents, str) or len(contents) > SCRATCHPAD_CHARS:
+                stats["format"] += 1
+                continue
         tasks.append(
             HintedTask(
                 input=prompt + reply,
                 env_params={"tools": TOOLS, "source_trace": trace["trace_id"]},
                 opsd_hint_selections=[
                     HintSelection(
-                        hint=hint,
+                        hint=cleanup_hint if cleanup else hint,
                         rollout_prefix_len=len(prompt),
                         mutation=HintMutation(item_boundary=1, action="append_to_previous_item", separator=SEPARATOR),
                     )
@@ -75,6 +96,8 @@ def decision_tasks(trace: dict, hint: str, max_tokens: int) -> tuple[list[Hinted
             )
         )
         stats["kept"] += 1
+        if cleanup:
+            stats["cleanup_kept"] += 1
     return tasks, stats
 
 
@@ -84,18 +107,29 @@ def main() -> None:
     parser.add_argument("--eval", required=True, help="base model's eval on the train deals")
     parser.add_argument("--dataset", required=True)
     parser.add_argument("--max-tokens", type=int, default=5_000, help="replies this long count as truncated (the event's cap)")
+    parser.add_argument("--opponent-reads", action="store_true",
+                        help="distill seat reads from multi-hand traces, including clean scratchpad updates")
+    parser.add_argument("--cleanup-max-tokens", type=int, default=10_000, help="output cap for scratchpad updates")
     parser.add_argument("--traces", type=Path, help="reuse a downloaded trace export")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
+    if args.max_tokens < 1 or args.cleanup_max_tokens < 1:
+        parser.error("token caps must be positive")
 
     path = args.traces or Path(f"traces/{args.eval}.jsonl")
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
         Client(project=args.project).traces.download(args.eval, path)
     tasks, totals = [], {"decisions": 0, "kept": 0, "cleanup": 0, "format": 0, "truncated": 0}
+    hint = f"{PLACEMENT_GUIDANCE}\n\n{ACTION_GUIDANCE}" if args.opponent_reads else HINT
+    cleanup_hint = CLEANUP_GUIDANCE if args.opponent_reads else None
+    if args.opponent_reads:
+        totals["cleanup_kept"] = 0
     with path.open() as lines:
         for line in lines:
-            built, stats = decision_tasks(json.loads(line), HINT, args.max_tokens)
+            built, stats = decision_tasks(
+                json.loads(line), hint, args.max_tokens, cleanup_hint=cleanup_hint, cleanup_max_tokens=args.cleanup_max_tokens,
+            )
             tasks.extend(built)
             totals = {k: totals[k] + stats[k] for k in totals}
     random.Random(0).shuffle(tasks)

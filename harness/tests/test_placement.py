@@ -1,5 +1,7 @@
 """`place_value`: a stack's worth when the game is ranked by finishing place."""
 
+import itertools
+
 import pytest
 
 from poker_harness.placement import place_value
@@ -32,7 +34,7 @@ def test_the_same_lead_is_worth_more_with_fewer_hands_left() -> None:
 def test_more_chips_are_never_worse_but_each_extra_chip_is_worth_less_when_ahead() -> None:
     values = [value(EVEN | {"seat0": stack}, 10) for stack in (200, 300, 400, 500)]
     assert values == sorted(values)
-    gains = [b - a for a, b in zip(values, values[1:], strict=False)]
+    gains = [b - a for a, b in itertools.pairwise(values)]
     assert gains[0] > gains[1] > gains[2]
 
 

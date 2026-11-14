@@ -271,7 +271,9 @@ def applied_action_text(action: dict[str, Any]) -> str:
     return f"{text} ({error})" if error else text
 
 
-def update_prompt(ctx: DecisionContext, others: list[dict[str, Any]], note: str = "", talk: bool = False) -> str:
+def update_prompt(
+    ctx: DecisionContext, others: list[dict[str, Any]], note: str = "", talk: bool = False
+) -> str:
     """A later user message in the same hand: what everyone else did since your last action, then the state."""
     return "\n".join(
         [

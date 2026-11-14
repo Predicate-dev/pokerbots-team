@@ -145,6 +145,8 @@ async def play_session(
     eliminated: dict[str, int] = {by_seat[s].name: first_hand - 1 for s in by_seat if begin[s] == 0}
     start_time = datetime.now(UTC).isoformat()
     button = max(by_seat) if button_seat is None else button_seat
+    if button_seat is None and stacks[button] == 0:  # a seat that starts busted can't hold the button
+        button = _next_live_seat(button, stacks)
     official = rules.ranking is not None
     # Multi-hand talk tables without the after-hand turn: each seat's next hand opens with what it missed of the last.
     recap = rules.table_talk and not rules.scratchpad and rules.total_hands > 1

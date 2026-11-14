@@ -113,6 +113,11 @@ def test_the_default_button_skips_busted_seats() -> None:
     assert table_start({"initial_stacks": [200] * 6}, EVENT, {0}).button_seat == 5  # the official hand-1 button
 
 
+def test_play_session_without_a_button_seat_never_gives_the_button_to_a_busted_seat() -> None:
+    log = game(initial_stacks=dict(enumerate([240, 240, 240, 240, 240, 0])), last_hand=1)
+    assert log["hands"][0]["button_seat"] == 0  # seat 5 started busted
+
+
 @pytest.mark.parametrize(
     ("params", "message"),
     [

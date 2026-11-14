@@ -7,7 +7,7 @@ import pytest
 from ac2.runtime import FunctionCall, Message, Reasoning
 
 from vals_tools.score import summarize
-from vals_tools.tasks import SPLITS, Opponents, datasets
+from vals_tools.tasks import GAME_HANDS, SPLITS, Opponents, datasets, placement_datasets
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / "opsd")]
@@ -30,6 +30,29 @@ def test_splits_share_no_deal_and_cycle_every_seat() -> None:
     assert params["preset"] == "event" and built["p-table-smoke"][0].env_params["preset"] == "event"
     assert params["total_hands"] == 1 and "chat_template_kwargs" not in params  # thinking comes from the preset
     assert "policy_seats" not in built["p-table-smoke"][0].env_params  # every seat is the evaluated model
+
+
+def test_placement_datasets_mix_mid_game_hands_scored_on_place_with_fresh_hands_scored_on_chips() -> None:
+    built = placement_datasets("p-place", OPPONENT)
+    assert set(built) == {f"p-place-{split}" for split in SPLITS}
+    train = built["p-place-train"]
+    assert placement_datasets("p-place", OPPONENT)["p-place-train"][7].env_params == train[7].env_params  # same seeds
+    midgame = [t for t in train if t.grader_params]
+    fresh = [t for t in train if not t.grader_params]
+    assert 0.4 < len(midgame) / len(train) < 0.6
+    assert all(t.env_params["total_hands"] == 1 and "starting_stacks" not in t.env_params for t in fresh)
+    late = 0
+    for task in midgame:
+        params, hand = task.env_params, task.env_params["first_hand"]
+        stacks, seat = params["starting_stacks"], params["policy_seats"][0]
+        assert 2 <= hand <= GAME_HANDS and params["play_hands"] == 1 and "total_hands" not in params  # the preset's 30
+        assert task.grader_params == {"reward": "placement", "hands_left": GAME_HANDS - hand}
+        assert len(stacks) == 6 and sum(stacks) == 1200 and min(stacks) >= 0
+        assert stacks[seat] > 0 and sum(s > 0 for s in stacks) >= 2
+        late += hand >= 24
+    assert 0.4 < late / len(midgame) < 0.6 and any(0 in t.env_params["starting_stacks"] for t in midgame)
+    seeds = [t.env_params["seed"] for tasks in built.values() for t in tasks]
+    assert len(seeds) == len(set(seeds))
 
 
 def row(ev: float) -> dict:

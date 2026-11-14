@@ -6,6 +6,7 @@ grader (harness/src/poker_harness/grading.py) scores each hand by its EV in big 
 
     uv run python rl/make_dataset.py --dry-run
     uv run python rl/make_dataset.py
+    uv run python rl/make_dataset.py --placement --prefix pokerbots-place --dry-run   # finishing-place datasets
     uv run python rl/make_dataset.py --opponent-model vals-hackathon/opponent --opponent-api responses --opponent-effort medium
 
 By default the opponents are `vals-hackathon/ac-vals-model`, the model every team org starts with.
@@ -20,7 +21,7 @@ from pathlib import Path
 from ac2.sdk import Client
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from vals_tools.tasks import SEATS, Opponents, datasets  # noqa: E402
+from vals_tools.tasks import SEATS, Opponents, datasets, placement_datasets  # noqa: E402
 
 
 def main() -> None:
@@ -37,11 +38,20 @@ def main() -> None:
     )
     parser.add_argument("--opponent-effort", default="none", help="reasoning effort for the opponents, e.g. medium")
     parser.add_argument("--seats", type=int, default=SEATS)
+    parser.add_argument(
+        "--placement",
+        action="store_true",
+        help="make the finishing-place datasets instead: half mid-game hands scored on placement, half fresh hands "
+        "scored on chips. Give them their own --prefix, e.g. pokerbots-place",
+    )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
     effort = None if args.opponent_effort == "none" else args.opponent_effort
-    built = datasets(args.prefix, Opponents(args.opponent_model, args.opponent_api, effort), args.seats)
+    if args.placement and args.prefix == "pokerbots":
+        parser.error("--placement needs its own --prefix (e.g. pokerbots-place) so it can't overwrite pokerbots-train")
+    build = placement_datasets if args.placement else datasets
+    built = build(args.prefix, Opponents(args.opponent_model, args.opponent_api, effort), args.seats)
     if args.dry_run:
         for name, tasks in built.items():
             print(name, len(tasks), tasks[0].env_params)

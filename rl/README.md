@@ -72,6 +72,34 @@ uv run python rl/train.py --prefix pokerbots-ledger --dry-run
 - The blank-start hands score 0 on the ledger until the model has learned the layout from the seeded ones, so
   expect them to contribute nothing at first.
 
+## Training the two personas
+
+Opponents taking notes on us write down what they can see, and bet sizes are what they see most. The personas
+(`harness/.../persona.py`) are two ways to size, played with the same hands:
+
+| Mode | Open raise | Bet after the flop |
+| --- | --- | --- |
+| `small` | to 2.5 BB or less | half the pot or less |
+| `big` | to 3 BB or more | 60% of the pot or more |
+
+A mode is held for a block of 10 hands and named on the ledger's `MODE` line. Each new block's mode comes from a
+coin nobody else can see, the suit of our first hole card on the hand it is chosen, so a note such as "opens small"
+is right for one block and wrong half the time in the next.
+
+```bash
+uv run python rl/make_dataset.py --placement --personas --prefix pokerbots-persona --dry-run
+uv run python rl/make_dataset.py --snapshots harness/runs/snapshots.jsonl --personas --prefix pokerbots-real --dry-run
+```
+
+- **Neither persona is a throwaway.** The hand is scored on its result the same way in both modes, and tasks name
+  each mode equally often, so both are trained to win.
+- **1 of the 10 reward points goes to playing the part** (`grader_params.persona_weight`): the right `MODE` line
+  after the hand, and open raises and bets sized to the mode in force. Reraises, raises after the flop and all-ins
+  are left to the model. `--personas` brings the ledger (2 points) with it, so 7 points stay with the hand.
+- Which hands are played, and how often, is the same in both modes, so the counts an opponent's tracker keeps on us
+  do not give the mode away. Only sizes differ.
+- Not covered yet: table talk. Nothing here trains what the model says or keeps it from hinting at its hand.
+
 ## Training on hands from real games
 
 The spots above are made up. Snapshots are cut from games that were really played: each one is a single hand with

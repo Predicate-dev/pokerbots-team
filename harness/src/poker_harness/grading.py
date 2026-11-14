@@ -43,7 +43,8 @@ Training-only rewards (opt-in through the task's `grader_params`; a task without
 
 "placement" is for multi-hand carry-over games, where the arena rates the finishing place, not the chips. The seat's
 place comes from the same "elimination" ranking the arena uses (`game.placements`: seats still in rank above every
-busted seat, by chips; busted seats by when they busted). With n seats at the table:
+busted seat, by chips; busted seats by when they busted). With n seats that had chips when the task started (a
+seat that starts at 0 always ranks below them, so it doesn't count):
 
     rank_share = (n - place) / (n - 1)                       1 for first place, 0 for last
     chip_share = the seat's final chips / all chips in play   0 when busted
@@ -156,7 +157,7 @@ class Placement:
     """Where the trained seat finished a multi-hand game (averaged over the policy seats when there are several)."""
 
     place: float  # 1 = best; tied seats share a place
-    seats: int
+    seats: int  # seats with chips when the log started
     final_chips: float
     chip_share: float  # of all chips in play
     busted: bool  # any policy seat ended with no chips
@@ -171,11 +172,15 @@ def placement(log: dict[str, Any], policy_seats: list[str]) -> Placement:
     if total <= 0 or any(seat not in chips for seat in policy_seats):
         raise GradingError("the log has no final stacks for the policy seats")
     places = placements(log, "elimination")
+    # Seats that started the log with no chips always rank last, so they aren't places the policy can reach: rank
+    # among the seats in play at the start, so 0 means last of those whatever the table's size.
+    info = log["session_info"]
+    in_play = sum(chips > 0 for chips in info.get("starting_stacks", [])) or len(places)
     count = len(policy_seats)
     mine = sum(chips[seat] for seat in policy_seats) / count
     return Placement(
         place=sum(places[seat] for seat in policy_seats) / count,
-        seats=len(places),
+        seats=in_play,
         final_chips=mine,
         chip_share=mine / total,
         busted=any(chips[seat] == 0 for seat in policy_seats),

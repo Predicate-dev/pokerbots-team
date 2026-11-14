@@ -55,6 +55,26 @@ def test_placement_datasets_mix_mid_game_hands_scored_on_place_with_fresh_hands_
     assert len(seeds) == len(set(seeds))
 
 
+def test_ledger_datasets_seed_a_ledger_that_matches_the_table_and_grade_its_update() -> None:
+    train = placement_datasets("p-ledger", OPPONENT, ledger=True)["p-ledger-train"]
+    assert all(t.grader_params["ledger_weight"] == 2 for t in train)
+    midgame = [t for t in train if "first_hand" in t.env_params]
+    fresh = [t for t in train if "first_hand" not in t.env_params]
+    for task in midgame:
+        params, ledger = task.env_params, task.env_params["starting_ledger"]
+        assert task.grader_params["reward"] == "placement"
+        assert (ledger["hand"], ledger["total"]) == (params["first_hand"] - 1, GAME_HANDS)
+        assert ledger["me"] == f"seat{params['policy_seats'][0]}"
+        assert [row["stack"] for row in ledger["seats"].values()] == params["starting_stacks"]
+        live = [row for row in ledger["seats"].values() if row["stack"]]
+        assert all(row["n"] == ledger["hand"] and row["3b"] <= row["pr"] <= row["vp"] <= row["n"] for row in live)
+    seeded = [t for t in fresh if "starting_ledger" in t.env_params]
+    assert 0.4 < len(seeded) / len(fresh) < 0.6  # the rest start blank, as every arena game does
+    assert all(t.env_params["starting_ledger"]["hand"] == 0 and "reward" not in t.grader_params for t in seeded)
+    plain = placement_datasets("p-place", OPPONENT)["p-place-train"]
+    assert not any("starting_ledger" in t.env_params or "ledger_weight" in (t.grader_params or {}) for t in plain)
+
+
 def row(ev: float) -> dict:
     return {"ev_bb": ev, "realized_bb": ev, "policy_format_errors": 0}
 

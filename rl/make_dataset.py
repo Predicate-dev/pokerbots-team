@@ -7,6 +7,7 @@ grader (harness/src/poker_harness/grading.py) scores each hand by its EV in big 
     uv run python rl/make_dataset.py --dry-run
     uv run python rl/make_dataset.py
     uv run python rl/make_dataset.py --placement --prefix pokerbots-place --dry-run   # finishing-place datasets
+    uv run python rl/make_dataset.py --placement --ledger --prefix pokerbots-ledger --dry-run   # + seat ledger
     uv run python rl/make_dataset.py --opponent-model vals-hackathon/opponent --opponent-api responses --opponent-effort medium
 
 By default the opponents are `vals-hackathon/ac-vals-model`, the model every team org starts with.
@@ -44,14 +45,24 @@ def main() -> None:
         help="make the finishing-place datasets instead: half mid-game hands scored on placement, half fresh hands "
         "scored on chips. Give them their own --prefix, e.g. pokerbots-place",
     )
+    parser.add_argument(
+        "--ledger",
+        action="store_true",
+        help="with --placement: also start scratchpads as a seat ledger and grade how correctly it is updated",
+    )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
     effort = None if args.opponent_effort == "none" else args.opponent_effort
     if args.placement and args.prefix == "pokerbots":
         parser.error("--placement needs its own --prefix (e.g. pokerbots-place) so it can't overwrite pokerbots-train")
-    build = placement_datasets if args.placement else datasets
-    built = build(args.prefix, Opponents(args.opponent_model, args.opponent_api, effort), args.seats)
+    if args.ledger and not args.placement:
+        parser.error("--ledger goes with --placement")
+    opponents = Opponents(args.opponent_model, args.opponent_api, effort)
+    if args.placement:
+        built = placement_datasets(args.prefix, opponents, args.seats, ledger=args.ledger)
+    else:
+        built = datasets(args.prefix, opponents, args.seats)
     if args.dry_run:
         for name, tasks in built.items():
             print(name, len(tasks), tasks[0].env_params)

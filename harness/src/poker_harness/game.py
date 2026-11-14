@@ -145,7 +145,9 @@ async def play_session(
     # Seats already out at a mid-game start rank below every seat that busts later.
     eliminated: dict[str, int] = {by_seat[s].name: first - 1 for s in by_seat if initial[s] == 0}
     start_time = datetime.now(UTC).isoformat()
-    button = max(by_seat)
+    button = max(by_seat) if rules.button_seat is None else rules.button_seat
+    if button not in by_seat:
+        raise ValueError(f"button_seat {button} is not a seat at this table")
     if stacks[button] == 0:  # only at a mid-game start: the button can't be on a seat that is out
         button = _next_live_seat(button, stacks)
     official = rules.ranking is not None

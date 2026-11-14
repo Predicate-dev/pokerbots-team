@@ -122,6 +122,20 @@ def from_params(params: dict[str, Any]) -> Ledger:
     return Ledger(int(params["hand"]), int(params["total"]), str(params["me"]), seats, notes)
 
 
+def to_params(ledger: Ledger) -> dict[str, Any]:
+    """The reverse of `from_params`: the ledger as a task's `env_params.starting_ledger`."""
+    seats: dict[str, dict[str, Any]] = {}
+    for name, seat in ledger.seats.items():
+        if seat.stack <= 0:
+            seats[name] = {"stack": 0}
+            continue
+        seats[name] = {"stack": seat.stack, **seat.counts, "open": list(seat.opens)}
+        if seat.note:
+            seats[name]["note"] = seat.note
+    out: dict[str, Any] = {"hand": ledger.hand, "total": ledger.total, "me": ledger.me, "seats": seats}
+    return out | ({"notes": list(ledger.notes)} if ledger.notes else {})
+
+
 def update(prior: Ledger | None, hand: dict[str, Any], me: str, total: int) -> Ledger:
     """The ledger after `hand` (a game log's hand record): `prior` with this hand's public actions added. Without a
     usable `prior` every seat starts from zero. Notes and reads carry over untouched."""

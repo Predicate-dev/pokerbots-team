@@ -75,6 +75,22 @@ def test_ledger_datasets_seed_a_ledger_that_matches_the_table_and_grade_its_upda
     assert not any("starting_ledger" in t.env_params or "ledger_weight" in (t.grader_params or {}) for t in plain)
 
 
+def test_persona_datasets_name_a_mode_on_the_ledger_and_grade_playing_it() -> None:
+    train = placement_datasets("p-persona", OPPONENT, personas=True)["p-persona-train"]
+    assert all(t.grader_params["persona_weight"] == 1 and t.grader_params["ledger_weight"] == 2 for t in train)
+    modes = []
+    for task in (t for t in train if "first_hand" in t.env_params):
+        ledger, hand = task.env_params["starting_ledger"], task.env_params["first_hand"]
+        modes.append(ledger["mode"]["name"])
+        assert ledger["mode"]["through"] % 10 == 0 and hand <= ledger["mode"]["through"] < hand + 10
+    assert 0.4 < modes.count("small") / len(modes) < 0.6 and set(modes) == {"small", "big"}  # neither is the default
+    first_hands = [t.env_params for t in train if "first_hand" not in t.env_params]
+    fresh = [params["starting_ledger"] for params in first_hands if "starting_ledger" in params]
+    assert fresh and all("mode" not in ledger for ledger in fresh)  # no mode before the first hand's cards
+    ledger_only = placement_datasets("p-ledger", OPPONENT, ledger=True)["p-ledger-train"]
+    assert not any("persona_weight" in t.grader_params for t in ledger_only)
+
+
 def test_snapshot_datasets_replay_real_hands_and_keep_each_game_in_one_split() -> None:
     def spot(game: int, hand: int) -> dict:
         ledger = {"hand": hand - 1, "total": 30, "me": "seat2", "seats": {"seat0": {"stack": 300}}}

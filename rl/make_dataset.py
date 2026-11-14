@@ -8,6 +8,7 @@ grader (harness/src/poker_harness/grading.py) scores each hand by its EV in big 
     uv run python rl/make_dataset.py
     uv run python rl/make_dataset.py --placement --prefix pokerbots-place --dry-run   # finishing-place datasets
     uv run python rl/make_dataset.py --placement --ledger --prefix pokerbots-ledger --dry-run   # + seat ledger
+    uv run python rl/make_dataset.py --placement --personas --prefix pokerbots-persona --dry-run   # + the personas
     uv run python rl/make_dataset.py --snapshots harness/runs/snapshots.jsonl --ledger --prefix pokerbots-real --dry-run
     uv run python rl/make_dataset.py --opponent-model vals-hackathon/opponent --opponent-api responses --opponent-effort medium
 
@@ -54,6 +55,12 @@ def main() -> None:
         "is updated",
     )
     parser.add_argument(
+        "--personas",
+        action="store_true",
+        help="with --placement or --snapshots: also grade the two bet-sizing personas (the ledger's MODE line and "
+        "sizes that fit it). Brings --ledger with it",
+    )
+    parser.add_argument(
         "--snapshots",
         type=Path,
         help="make -train and -select from hands cut out of real games (harness/cut_snapshots.py writes this file), "
@@ -67,17 +74,17 @@ def main() -> None:
         parser.error("--placement and --snapshots need their own --prefix so they can't overwrite pokerbots-train")
     if args.placement and args.snapshots:
         parser.error("--placement makes up its spots and --snapshots reads real ones: pick one")
-    if args.ledger and not (args.placement or args.snapshots):
-        parser.error("--ledger goes with --placement or --snapshots")
+    if (args.ledger or args.personas) and not (args.placement or args.snapshots):
+        parser.error("--ledger and --personas go with --placement or --snapshots")
     opponents = Opponents(args.opponent_model, args.opponent_api, effort)
     if args.snapshots:
         spots = [json.loads(line) for line in args.snapshots.read_text().splitlines() if line.strip()]
-        built = snapshot_datasets(args.prefix, spots, opponents, ledger=args.ledger)
+        built = snapshot_datasets(args.prefix, spots, opponents, ledger=args.ledger, personas=args.personas)
         for name in [name for name, tasks in built.items() if not tasks]:
             print(f"{name}: no tasks (too few games to hold one out); train with --no-eval or cut more games")
             del built[name]
     elif args.placement:
-        built = placement_datasets(args.prefix, opponents, args.seats, ledger=args.ledger)
+        built = placement_datasets(args.prefix, opponents, args.seats, ledger=args.ledger, personas=args.personas)
     else:
         built = datasets(args.prefix, opponents, args.seats)
     if args.dry_run:

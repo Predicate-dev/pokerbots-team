@@ -1,14 +1,20 @@
 """The placement reward (`grader_params.reward = "placement"`): a hand is scored on how much it moved the trained
 seat's expected finishing place. Tasks without `reward` are scored on chips, as `test_grading.py` checks."""
 
+import asyncio
+from pathlib import Path
+
+import httpx
 import pytest
 from test_official_rules import OFFICIAL, bot, seats, shove, submit
+from test_server import TASK, fake_relay, play
 
 from poker_harness.ev import label_ev
 from poker_harness.game import play_session
 from poker_harness.grading import FAILURE_SCORE, REWARD_OFFSET, GradingError, check_grader_params, grade_log
 from poker_harness.placement import DEFAULT_NOISE_BB, place_value
 from poker_harness.prompts import TableRules
+from poker_harness.server import create_app
 
 NOISE = DEFAULT_NOISE_BB * 2  # chips, at the 1/2 game
 FOLD = bot(lambda messages: submit("fold"))
@@ -135,3 +141,41 @@ def test_placement_settings_are_checked() -> None:
             check_grader_params(bad)
     with pytest.raises(GradingError):  # one seat's finishing place, not a team's
         grade_log(bust_log(200), ["seat0", "seat1"], placement(10))
+
+
+async def test_a_mid_game_task_plays_and_grades_through_the_server(tmp_path: Path) -> None:
+    """The task `vals_tools.tasks.midgame_task` builds, end to end: /submit, then the Grader API."""
+    env = {
+        "preset": "event",
+        "seed": 9,
+        "seats": 6,
+        "starting_stacks": [155, 275, 0, 218, 190, 362],
+        "first_hand": 26,
+        "play_hands": 1,
+        "policy_seats": [3],
+        "ev_labels": True,
+    }
+    task = {"input": TASK["input"], "env_params": env, "grader_params": {"reward": "placement", "hands_left": 4}}
+    requests: list[dict] = []
+    app = create_app(relay_transport=httpx.ASGITransport(app=fake_relay(requests)), runs_dir=tmp_path)
+    status, outputs = await play(app, task)
+    assert status["status"] == "completed"
+    (hand,) = outputs["log"]["hands"]
+    assert hand["hand_number"] == 26 and "seat2" not in hand["starting_state"]
+    first_prompt = next(m["content"] for m in requests[0]["body"]["messages"] if "## Hand" in str(m.get("content")))
+    assert "## Hand 26 of 30" in first_prompt and "stack 362" in first_prompt
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://h") as client:
+        body = {"rollout_id": "gw_1", "rollout_status": "completed", "task": task}
+        assert (await client.post("/submit_grading", json=body, headers={"Idempotency-Key": "gw_1:grading"})).is_success
+        for _ in range(200):
+            grading = (await client.post("/get_grading_status", json={"rollout_id": "gw_1"})).json()
+            if grading["status"] not in ("queued", "running"):
+                break
+            await asyncio.sleep(0.02)
+        reply = (await client.post("/collect_score", json={"rollout_id": "gw_1"})).json()
+    assert grading["status"] == "completed"
+    artifacts = reply["artifacts"]
+    assert artifacts["reward"] == "placement" and 0 < artifacts["place_before"] < 1
+    assert reply["score"] == pytest.approx(REWARD_OFFSET + 10 * (artifacts["place_after"] - artifacts["place_before"]))
+    assert FAILURE_SCORE < reply["score"] <= 11

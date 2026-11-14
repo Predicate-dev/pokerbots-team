@@ -50,7 +50,7 @@ from .grading import GradingError, bounded, check_grader_params, failure_score, 
 from .labels import label_folds
 from .prompts import TableRules, talk_fields
 from .seat import ModelSeat
-from .training import SCRIPTED, opponent_specs, spec_params, table_start
+from .training import SCRIPTED, TrainingSetupError, opponent_specs, spec_params, table_start
 
 logger = logging.getLogger("poker_harness.server")
 
@@ -244,6 +244,9 @@ def create_app(
             # Training-only setups (`training.py`): both are empty for a task that sets none of their keys.
             start = table_start(params, rollout.rules, policy)
             specs = opponent_specs(params, seats, policy)
+            scripted_pads = sorted(i for i in start.scratchpads if isinstance(specs.get(i), str))
+            if scripted_pads:  # scripted players keep no notes, so the scratchpad would be dropped
+                raise TrainingSetupError(f"env_params.initial_scratchpad: seats {scripted_pads} are scripted players")
             modeled = [  # opponent seats that call the opponent endpoint
                 i
                 for i in range(seats)

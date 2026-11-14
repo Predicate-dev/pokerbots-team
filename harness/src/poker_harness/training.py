@@ -15,7 +15,7 @@ Mid-game starts (`table_start`)
                         that hand if nobody had busted (seat `seats - 1` on hand 1, one seat on per hand), moved on to
                         the next seat with chips.
     initial_scratchpad  the scratchpad the task starts with: a string for every policy seat, or {seat: string}.
-                        Scratchpad tables only; at most `scratchpad_chars` characters.
+                        Scratchpad tables only, not for scripted seats; at most `scratchpad_chars` characters.
 
 Per-seat opponents (`opponent_specs`)
 -------------------------------------

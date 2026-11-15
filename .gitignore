@@ -6,3 +6,4 @@ __pycache__/
 uv.lock
 traces/
 harness/runs/
+arena_data/

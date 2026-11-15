@@ -72,6 +72,36 @@ def test_opsd_builder_makes_one_hinted_task_per_clean_decision() -> None:
     assert "hint" not in json.dumps([i.model_dump(mode="json") for i in task.input])  # only the teacher sees it
 
 
+def test_opponent_read_opsd_keeps_only_valid_cleanup_with_its_own_hint() -> None:
+    def span(start: int, arguments: str, tokens: int) -> dict:
+        prompt = [Message(role="system", content="rules"), Message(role="user", content="cleanup")]
+        reply = [FunctionCall(call_id="c1", name="update_scratchpad", arguments=arguments)]
+        return {
+            "name": "get_completion",
+            "status": "OK",
+            "start_time": start,
+            "input": json.dumps([item.model_dump(mode="json") for item in prompt]),
+            "output": json.dumps([item.model_dump(mode="json") for item in reply]),
+            "tokens_out": tokens,
+        }
+
+    trace = {
+        "trace_id": "game",
+        "spans": [
+            span(1, '{"contents":"seat 2 uncertain"}', 200),
+            span(2, '{"contents":7}', 10),
+            span(3, '{"contents":"capped"}', 400),
+        ],
+    }
+    tasks, stats = build_dataset.decision_tasks(
+        trace, "action guidance", 100, cleanup_hint="cleanup guidance", cleanup_max_tokens=400,
+    )
+    assert stats == {"decisions": 3, "kept": 1, "cleanup": 3, "format": 1, "truncated": 1, "cleanup_kept": 1}
+    assert tasks[0].opsd_hint_selections[0].hint == "cleanup guidance"
+    assert tasks[0].input[-1].name == "update_scratchpad"
+    assert build_dataset.decision_tasks(trace, "action guidance", 100)[0] == []
+
+
 def test_training_configs_send_only_explicit_settings() -> None:
     """Unset flags are not sent, so AC2 keeps its defaults; a flag that is set shows up in the configuration."""
     spec = importlib.util.spec_from_file_location("rl_train", ROOT / "rl" / "train.py")

@@ -118,25 +118,43 @@ async def play_session(
     players: Sequence[Player],
     rules: TableRules = DEFAULT_RULES,
     on_hand: Callable[[dict[str, Any]], None] | None = None,
+    *,
+    initial_stacks: dict[int, int] | None = None,
+    first_hand: int = 1,
+    last_hand: int | None = None,
+    button_seat: int | None = None,
 ) -> dict[str, Any]:
     """Returns the game log. With `rules.reset_stacks`, every hand starts at `starting_stack` and nobody busts;
-    `final_stacks` is then the starting stack plus the session's net chips."""
+    `final_stacks` is then the starting stack plus the session's net chips.
+
+    Training-only starts (`training.py`; all off by default, and the log is unchanged without them): `initial_stacks`
+    (seat -> chips, 0 for a seat that already busted) replaces the equal starting stacks, `first_hand` and `last_hand`
+    play only that window of the game's hands (prompts still show the true hand number of `rules.total_hands`), and
+    `button_seat` puts the button there on the first hand played."""
     names = [p.name for p in players]
     if len(set(names)) != len(names):
         raise ValueError(f"duplicate players at one table: {names}")
     by_seat = dict(enumerate(players))
     start = rules.starting_stack
-    stacks = dict.fromkeys(by_seat, start)
+    stacks = dict.fromkeys(by_seat, start) if initial_stacks is None else {s: initial_stacks[s] for s in by_seat}
+    begin = dict(stacks)  # each seat's stack when this log starts
     net = dict.fromkeys(by_seat, 0)
     no_history = dict.fromkeys(by_seat, "")
     hands: list[dict[str, Any]] = []
-    eliminated: dict[str, int] = {}
+    # A seat that starts at 0 busted before this log began: it ranks below everyone who busts in it.
+    eliminated: dict[str, int] = {by_seat[s].name: first_hand - 1 for s in by_seat if begin[s] == 0}
     start_time = datetime.now(UTC).isoformat()
-    button = max(by_seat)
+    button = max(by_seat) if button_seat is None else button_seat
+    if button_seat is None and stacks[button] == 0:  # a seat that starts busted can't hold the button
+        button = _next_live_seat(button, stacks)
     official = rules.ranking is not None
     # Multi-hand talk tables without the after-hand turn: each seat's next hand opens with what it missed of the last.
     recap = rules.table_talk and not rules.scratchpad and rules.total_hands > 1
     timestep = 0
+    # Only a training start adds these, so every other log keeps its exact shape.
+    window: dict[str, Any] = {}
+    if initial_stacks is not None or first_hand != 1 or last_hand is not None or button_seat is not None:
+        window = {"first_hand": first_hand, "last_hand": last_hand or rules.total_hands, "game_hands": rules.total_hands}
 
     def log(complete: bool) -> dict[str, Any]:
         out = {
@@ -144,7 +162,7 @@ async def play_session(
             "hands": hands,
             "session_info": {
                 "player_names": names,
-                "starting_stacks": [start] * len(names),
+                "starting_stacks": [begin[s] for s in by_seat],
                 "small_blind": rules.small_blind,
                 "big_blind": rules.big_blind,
                 "seed": seed,
@@ -154,8 +172,9 @@ async def play_session(
                 "reset_stacks": rules.reset_stacks,
                 "table_talk": rules.table_talk,
                 "history": "current_hand",
+                **window,
             },
-            "final_stacks": {by_seat[s].name: start + net[s] for s in by_seat},
+            "final_stacks": {by_seat[s].name: begin[s] + net[s] for s in by_seat},
             "eliminated_on_hand": dict(eliminated),
             "complete": complete,
         }
@@ -172,12 +191,12 @@ async def play_session(
             }
         return out
 
-    for hand_number in range(1, rules.total_hands + 1):
+    for hand_number in range(first_hand, (last_hand or rules.total_hands) + 1):
         if rules.reset_stacks:
             stacks = dict.fromkeys(by_seat, start)
         elif sum(s > 0 for s in stacks.values()) < 2:
             break
-        if hand_number > 1:
+        if hand_number > first_hand:
             button = _next_live_seat(button, stacks)
         small_blind, big_blind = rules.small_blind, rules.big_blind
         stacks_before = {by_seat[s].name: stacks[s] for s in sorted(by_seat) if stacks[s] > 0}

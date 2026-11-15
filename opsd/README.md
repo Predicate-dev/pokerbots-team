@@ -55,3 +55,54 @@ and a reply under the token cap. The after-hand `update_scratchpad` turns are sk
 
 Compare the student with base on `pokerbots-eval`, both served the same way, paired per deal, with
 `python -m vals_tools.score`.
+
+## Learn opponent reads
+
+Test the hint on the existing deployment before using a training slot. Both arms get the same placement guidance.
+The opponent-read arm additionally gets guidance for recording observations in cleanup and applying them on later
+decisions. Each pair uses the same deck seed, starting seat and opponent lineup. The scorer reports paired placement
+and saves each arm's replay in its own directory.
+
+```bash
+cd harness
+uv run python score_local.py --model vals-hackathon/entry --opponent-read-ablation --games 8 --out runs/reads-pilot
+uv run python score_local.py --model vals-hackathon/entry --opponent-read-ablation --games 8 \
+  --seed 960510 --talk-mode shuffled --lineup mixed --out runs/reads-holdout
+```
+
+Inspect which bets change and whether the notes reflect the visible history. Use `--talk-mode muted` to remove
+scripted chatter while retaining the event prompt and tool schemas. Run the official prompt on the same seeds as
+a further baseline by omitting `--opponent-read-ablation`.
+
+If the hint improves placement, use multi-hand training deals for the source eval. The longer tasks let the
+base model write a note and then play a hand with it. The cleanup hint is applied to valid scratchpad updates.
+The action hint is applied to poker decisions. Check the `cleanup_kept` count before launching training.
+
+```bash
+# From the repository root. Omit --upload for a dry run.
+uv run python rl/make_training_datasets.py --family house --prefix pokerbots-reads-v1 \
+  --house-hands 3 --house-talk shuffled --count 240 --upload
+uv run python -m vals_tools.eval --dataset pokerbots-reads-v1-house-train --deployment vals-hackathon/entry
+uv run python opsd/build_dataset.py --eval <eval-id> --dataset pokerbots-opsd-reads-v1 --opponent-reads --dry-run
+```
+
+When the dataset checks pass, rerun the builder without `--dry-run` and use the standard offline training command.
+Compare the checkpoint on fresh full-game seeds with the official prompt. Keep all decisions and cleanup turns
+from a source game in the same split. Replay identities and unrevealed hole cards can inform offline analysis and
+should stay out of model inputs and hints.
+
+## Build from gateway traces (no eval needed)
+
+Every request a deployment answers is recorded at the inference gateway with its prompt and reply, whoever sent it.
+[`build_from_gateway.py`](build_from_gateway.py) builds the same hinted dataset from those records, so decisions the
+base deployment made in arena games and in local games (`harness/play_local.py`, `harness/score_local.py`) can be
+used without running an AC2 eval through the harness relay.
+
+```bash
+uv run python opsd/build_from_gateway.py --deployment-id <infer_...> --dataset pokerbots-opsd-tight            # dry run
+uv run python opsd/build_from_gateway.py --deployment-id <infer_...> --dataset pokerbots-opsd-tight --upload
+```
+
+It keeps the same decisions as `build_dataset.py` (one `submit_action` call, under the token cap) and skips
+scratchpad turns and non-poker requests. Use the base deployment's id only: offline OPSD replays the base model's
+own tokens. `--since <UTC time>` limits it to recent requests.

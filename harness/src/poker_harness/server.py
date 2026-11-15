@@ -46,9 +46,11 @@ from .completions import (
 from .ev import label_ev
 from .game import play_session
 from .grading import GradingError, bounded, check_grader_params, failure_score, grade_log
+from .house_bots import TALK_MODES
 from .labels import label_folds
 from .prompts import TableRules, talk_fields
 from .seat import ModelSeat
+from .training import TrainingSetupError, opponent_specs, scripted_player, spec_params, table_start
 
 logger = logging.getLogger("poker_harness.server")
 
@@ -58,6 +60,9 @@ MAX_OUTPUT_BYTES = 900_000  # the connector rejects upstream responses over 1 Mi
 class HarnessTask(BaseModel):
     input: list[Any]
     env_params: dict[str, Any] | None = None
+    # Checked before the table starts when AC2 sends it here, so a bad reward setting fails in seconds, not after
+    # the whole game; grading checks it again either way.
+    grader_params: dict[str, Any] | None = None
 
 
 class SubmitRequest(BaseModel):
@@ -233,9 +238,25 @@ def create_app(
             params = params | {"submit_fields": talk_fields(params.get("submit_fields"))}
         rollout.status = "running"
         try:
+            check_grader_params(request.task.grader_params)
             seats = int(params.get("seats", 10))
             policy = {int(i) for i in params.get("policy_seats", range(seats))}
-            if params.get("opponent_model") and not opponent_key and len(policy) < seats:
+            # Training-only setups (`training.py`): both are empty for a task that sets none of their keys.
+            start = table_start(params, rollout.rules, policy)
+            specs = opponent_specs(params, seats, policy)
+            house_talk = params.get("house_talk", "normal")
+            if house_talk not in TALK_MODES:
+                raise TrainingSetupError(f"env_params.house_talk must be one of {TALK_MODES}")
+            scripted_pads = sorted(i for i in start.scratchpads if isinstance(specs.get(i), str))
+            if scripted_pads:  # scripted players keep no notes, so the scratchpad would be dropped
+                raise TrainingSetupError(f"env_params.initial_scratchpad: seats {scripted_pads} are scripted players")
+            modeled = [  # opponent seats that call the opponent endpoint
+                i
+                for i in range(seats)
+                if i not in policy
+                and (isinstance(specs.get(i), dict) or (i not in specs and params.get("opponent_model")))
+            ]
+            if modeled and not opponent_key:
                 raise RuntimeError("opponent seats need POKER_OPPONENT_API_KEY or AC2_API_KEY in the harness environment")
             decision_timeout = float(params.get("decision_timeout_seconds", DEFAULT_DECISION_TIMEOUT_SECONDS))
             opponent_timeout = float(params.get("opponent_timeout_seconds", decision_timeout))
@@ -261,7 +282,7 @@ def create_app(
                     if params.get("opponent_model")
                     else policy_cleanup
                 )
-                players = [
+                players: list[Any] = [
                     ModelSeat(
                         f"seat{i}",
                         policy_complete if i in policy else opponent_complete,
@@ -272,8 +293,37 @@ def create_app(
                     )
                     for i in range(seats)
                 ]
+                for i, spec in specs.items():  # `env_params.opponent_seats`: scripted players and per-seat models
+                    if isinstance(spec, str):
+                        players[i] = scripted_player(f"seat{i}", spec, int(params["seed"]), talk_mode=house_talk)
+                        continue
+                    theirs = spec_params(params, spec)
+                    api = responses_completion if theirs.get("opponent_api") == "responses" else relay_completion
+                    seat_params = opponent_params(theirs)
+                    key = opponent_key or ""
+                    players[i] = ModelSeat(
+                        f"seat{i}",
+                        api(opponent_client, opponent_url, key, seat_params),
+                        rollout.rules,
+                        model=f"opponent/{theirs['opponent_model']}",
+                        timeout_seconds=opponent_timeout,
+                        cleanup_complete=api(opponent_client, opponent_url, key, cleanup_params(seat_params)),
+                        persona=spec.get("persona", ""),
+                    )
+                for i, text in start.scratchpads.items():  # `env_params.initial_scratchpad`
+                    if isinstance(players[i], ModelSeat):
+                        players[i].scratchpad = text
                 rollout.policy_seats = [f"seat{i}" for i in sorted(policy)]
-                rollout.log = await play_session(rollout.id, int(params["seed"]), players, rollout.rules)
+                rollout.log = await play_session(
+                    rollout.id,
+                    int(params["seed"]),
+                    players,
+                    rollout.rules,
+                    initial_stacks=start.initial_stacks,
+                    first_hand=start.first_hand,
+                    last_hand=start.last_hand,
+                    button_seat=start.button_seat,
+                )
                 label_folds(rollout.log, set(rollout.policy_seats))
                 if params.get("ev_labels"):  # all-in EV for the policy seats, scored by grading.py
                     rollout.log = await asyncio.get_running_loop().run_in_executor(

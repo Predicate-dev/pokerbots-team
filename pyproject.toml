@@ -12,7 +12,8 @@ requires-python = ">=3.12"
 dependencies = []
 
 [dependency-groups]
-dev = ["ac2>=0.3.97", "pytest>=8.0.0"]
+# pokerkit: rl/make_training_datasets.py reads hole cards through the harness engine (harness/src).
+dev = ["ac2>=0.3.97", "pytest>=8.0.0", "pokerkit>=0.7.7"]
 
 [tool.uv]
 package = true

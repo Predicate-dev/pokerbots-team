@@ -33,6 +33,26 @@ Keep failures at 0 and real hands above it, or a model can learn that failing pa
 
 This grader scores chips only. On single-hand tasks the scratchpad starts blank and its after-hand update is never
 read, so nothing here rewards or exercises scratchpad use; how to train that is up to you.
+
+Training-only rewards (opt-in through the task's `grader_params`; a task without them scores exactly as above)
+-------------------------------------------------------------------------------------------------------------
+    reward       "ev" (the default above) or "placement".
+    chip_weight  placement only: the share of the reward that comes from chips, 0-1 (default 0.25).
+    ev_unit_bb   ev only: big blinds per reward point (default 1). A K-hand task sums K hands of EV, so K keeps the
+                 sum inside the same [-5, +5] band a single hand uses.
+
+"placement" is for multi-hand carry-over games, where the arena rates the finishing place, not the chips. The seat's
+place comes from the same "elimination" ranking the arena uses (`game.placements`: seats still in rank above every
+busted seat, by chips; busted seats by when they busted). With n seats that had chips when the task started (a
+seat that starts at 0 always ranks below them, so it doesn't count):
+
+    rank_share = (n - place) / (n - 1)                       1 for first place, 0 for last
+    chip_share = the seat's final chips / all chips in play   0 when busted
+    score      = 1 + 10 * ((1 - chip_weight) * rank_share + chip_weight * chip_share)
+
+so a played game still scores in [1, 11] and a model-caused failure still scores exactly 0. The chip term is there
+because place alone is a step function: sixteen attempts at the same task often finish in the same place, and GRPO
+learns nothing from a group with no gaps. With several policy seats the reward is their average.
 """
 
 from __future__ import annotations
@@ -40,6 +60,8 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from typing import Any
+
+from .game import placements
 
 REWARD_OFFSET = 6.0  # shifts the clipped reward [-5, +5] to [1, 11]
 REWARD_FLOOR, REWARD_CEILING = -5.0, 5.0
@@ -50,7 +72,9 @@ MAX_SCORE_BYTES = 1 << 20  # AC2 rejects collect_score replies over 1 MiB
 
 # EXTENSION POINT 2: the `grader_params` keys your reward accepts. Unknown keys fail the grading, so a typo in a
 # dataset can't silently change the reward.
-GRADER_PARAMS: frozenset[str] = frozenset()
+GRADER_PARAMS: frozenset[str] = frozenset({"reward", "chip_weight", "ev_unit_bb"})
+REWARDS = ("ev", "placement")
+DEFAULT_CHIP_WEIGHT = 0.25
 
 
 class GradingError(ValueError):
@@ -76,6 +100,17 @@ def check_grader_params(grader_params: dict[str, Any] | None) -> dict[str, Any]:
     unknown = set(params) - GRADER_PARAMS
     if unknown:
         raise GradingError(f"unknown grader_params: {sorted(unknown)}")
+    reward = params.get("reward", "ev")
+    if reward not in REWARDS:
+        raise GradingError(f"grader_params.reward must be one of {list(REWARDS)}, got {reward!r}")
+    for key, low, high, mode in (("chip_weight", 0.0, 1.0, "placement"), ("ev_unit_bb", 1e-9, 1e9, "ev")):
+        if key not in params:
+            continue
+        value = params[key]
+        if isinstance(value, bool) or not isinstance(value, int | float) or not low <= value <= high:
+            raise GradingError(f"grader_params.{key} must be a number from {low:g} to {high:g}, got {value!r}")
+        if reward != mode:
+            raise GradingError(f"grader_params.{key} only applies to reward {mode!r}")
     return params
 
 
@@ -114,8 +149,49 @@ def hand_reward(result: SeatResult, params: dict[str, Any]) -> float:
     The default is EV in units of 1 BB, clipped to +-100 BB. `result` has everything the log says about the trained
     seat; read more from the log in `seat_result` if you need it. `params` is the task's checked `grader_params`.
     """
-    del params  # the default reward takes no parameters
-    return max(-EV_CLIP_BB, min(EV_CLIP_BB, result.ev_bb)) / EV_UNIT_BB
+    return max(-EV_CLIP_BB, min(EV_CLIP_BB, result.ev_bb)) / float(params.get("ev_unit_bb", EV_UNIT_BB))
+
+
+@dataclass
+class Placement:
+    """Where the trained seat finished a multi-hand game (averaged over the policy seats when there are several)."""
+
+    place: float  # 1 = best; tied seats share a place
+    seats: int  # seats with chips when the log started
+    final_chips: float
+    chip_share: float  # of all chips in play
+    busted: bool  # any policy seat ended with no chips
+
+
+def placement(log: dict[str, Any], policy_seats: list[str]) -> Placement:
+    """The policy seats' finish under the arena's "elimination" ranking, from the full game log."""
+    if not log.get("hands") or not policy_seats:
+        raise GradingError("the rollout has no hands or no policy seats")
+    chips = log["final_stacks"]
+    total = sum(chips.values())
+    if total <= 0 or any(seat not in chips for seat in policy_seats):
+        raise GradingError("the log has no final stacks for the policy seats")
+    places = placements(log, "elimination")
+    # Seats that started the log with no chips always rank last, so they aren't places the policy can reach: rank
+    # among the seats in play at the start, so 0 means last of those whatever the table's size.
+    info = log["session_info"]
+    in_play = sum(chips > 0 for chips in info.get("starting_stacks", [])) or len(places)
+    count = len(policy_seats)
+    mine = sum(chips[seat] for seat in policy_seats) / count
+    return Placement(
+        place=sum(places[seat] for seat in policy_seats) / count,
+        seats=in_play,
+        final_chips=mine,
+        chip_share=mine / total,
+        busted=any(chips[seat] == 0 for seat in policy_seats),
+    )
+
+
+def placement_reward(result: Placement, params: dict[str, Any]) -> float:
+    """The placement reward before the +1: 0 for last place with no chips, 10 for first place with every chip."""
+    weight = float(params.get("chip_weight", DEFAULT_CHIP_WEIGHT))
+    rank_share = (result.seats - result.place) / (result.seats - 1) if result.seats > 1 else 1.0
+    return 10.0 * ((1.0 - weight) * rank_share + weight * result.chip_share)
 
 
 def failure_score(reason: str) -> dict[str, Any]:
@@ -128,6 +204,8 @@ def grade_log(
 ) -> dict[str, Any]:
     """Score one finished game for its policy seats, as a `collect_score` reply."""
     result = seat_result(log, policy_seats)
+    if (params or {}).get("reward") == "placement":
+        return grade_placement(log, policy_seats, result, params or {})
     if result.format_errors:  # model-caused failure: exactly 0, below every real hand
         score = FAILURE_SCORE
     else:
@@ -144,6 +222,32 @@ def grade_log(
             "policy_decisions": result.decisions,
             "policy_format_errors": result.format_errors,
             "folded": result.folded,
+            "hands": result.hands,
+        },
+    }
+
+
+def grade_placement(
+    log: dict[str, Any], policy_seats: list[str], result: SeatResult, params: dict[str, Any]
+) -> dict[str, Any]:
+    """`reward: "placement"`: the finishing place with a chip term, in [1, 11]; a format error still scores 0."""
+    finish = placement(log, policy_seats)
+    score = FAILURE_SCORE if result.format_errors else 1.0 + placement_reward(finish, params)
+    return {
+        "score": score,
+        "reasoning": f"Policy seat {'/'.join(sorted(policy_seats))}: place {finish.place:g} of {finish.seats} with "
+        f"{finish.final_chips:g} chips ({finish.chip_share:.0%} of the chips) after {result.hands} hands, "
+        f"{result.format_errors} format errors.",
+        "artifacts": {
+            "reward": "placement",
+            "place": finish.place,
+            "seats": finish.seats,
+            "final_chips": finish.final_chips,
+            "chip_share": finish.chip_share,
+            "busted": finish.busted,
+            "realized_bb": result.realized_bb,
+            "policy_decisions": result.decisions,
+            "policy_format_errors": result.format_errors,
             "hands": result.hands,
         },
     }

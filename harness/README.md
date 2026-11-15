@@ -117,6 +117,18 @@ With `table_talk` on:
 
 Talk changes only what models see: with identical decisions, chips and actions match a talk-off table exactly.
 
+## Evaluating against house opponents
+
+`score_local.py --lineup arena --arena-replays ../arena_data --arena-entry Friends` samples six-seat rosters from
+the latest 50 ranked replays for the entry. Each house player keeps its recorded seat and uses the corresponding
+scripted imitation. Other opponents use the configured field deployment. Every player sees the standard seat names.
+Use the same replay directory and seed for both arms of a deployment comparison. The score and suite reports show
+results separately for tables with a house opponent and all-team tables.
+
+Run `eval_suite.py run` with `--arena-replays ../arena_data --field-thinking` for the same roster sampling with
+thinking enabled on the field deployments. In whole-hand RL, `rl/make_whole_hand_dataset.py` preserves the source
+replay's house seats by default. Its `--house-share` flag sets a randomized mix for controlled experiments.
+
 ## Pluribus puzzles
 
 Run these commands from `harness/` with a checkout of the PHH dataset. The build is local. Scoring uses an AC2

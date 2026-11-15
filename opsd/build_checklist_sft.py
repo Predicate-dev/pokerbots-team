@@ -36,18 +36,27 @@ from ac2.runtime import Task
 from ac2.sdk import Client
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "harness" / "src"))
+import open_card  # noqa: E402
+import playbook_rules  # noqa: E402
 from build_dataset import ITEMS, SCRATCHPAD, SUBMIT, TOOLS, is_official_prompt  # noqa: E402
 from build_from_gateway import fetch_spans  # noqa: E402
 from build_price_dataset import spot_key  # noqa: E402
-import open_card  # noqa: E402
-import playbook_rules  # noqa: E402
-from price_card import POSTFLOP_NAMES, _strength, card, parse_state, postflop_class, preflop_class  # noqa: E402
+from poker_harness.opponent_reads import betting_evidence  # noqa: E402
+from price_card import (  # noqa: E402
+    POSTFLOP_NAMES,
+    _strength,
+    card,
+    parse_state,
+    postflop_class,
+    preflop_class,
+)
 from price_run import PAD, with_notes  # noqa: E402
 
 NOTES = Path(__file__).with_name("notes") / "call_checklist.txt"
 KEEP = "The CALL CHECKLIST block stays at the top of my notes, word for word. Below it I write my notes for this hand."
-KEEP_BOTH = ("The CALL CHECKLIST and OPPONENT GUIDE blocks stay at the top of my notes, word for word. Below them I name "
-             "each seat's type from its talk and play, then write my notes for this hand.")
+KEEP_BOTH = ("The CALL CHECKLIST and OPPONENT GUIDE blocks stay at the top of my notes, word for word. "
+             "Below them I update each seat's counters from the betting actions I observed.")
 KEEP_PLAYBOOK = ("The CALL CHECKLIST and PLAYBOOK blocks stay at the top of my notes, word for word. Below them I write "
                  "my notes for this hand.")
 LIMIT = 5_000
@@ -58,33 +67,6 @@ REPLACED = ""  # an earlier wording of the block that generated replies were sho
 DROPPED_LINE_USE = re.compile(r"subtract 20|show me|oh no, sorry|never bets without|\b(?:rule|playbook) [DE]\b|\b[DE]\)", re.IGNORECASE)
 # a call decision is a training target only if its reply works from the checklist, not merely agrees with it
 USES_NOTES = re.compile(r"checklist|place margin|win ?%|\bneed\b|opponent guide|my notes", re.IGNORECASE)
-_SAID = re.compile(r'\(seat (\d+)\)[^\n]*? says: "([^"\n]*)"')
-_HERO = re.compile(r"Your seat: (\d+)")
-TYPES = (  # the guide's types, by the lines that give them away
-    ("NEVER FOLDS", ("i call, show me", "show me", "you are bluffing", "not buying it")),
-    ("SCARED", ("oh no", "please do not raise me")),
-    ("ALL-IN OR FOLD", ("all in, baby", "all in baby")),
-    ("TALKER", ("flopped the nuts", "ugh,", "ugh ")),
-    ("PROFESSOR", ("range", "discipline", "this holding", "implied odds", "standard", "textbook")),
-    ("TILTED", ("good luck", "nice raise", "unbelievable", "lucky twice", "keep it friendly", "nice and easy")),
-)
-
-
-def seat_types(prompt: list[dict]) -> str:
-    """"Seat types: seat 2 = SCARED; ..." from the talk shown in this hand, or "" when no line gives a type away."""
-    text = "\n".join(str(m.get("content")) for m in prompt[2:] if m.get("role") == "user")
-    hero = _HERO.search(text)
-    found: dict[int, str] = {}
-    for seat, line in _SAID.findall(text):
-        if hero and seat == hero[1]:
-            continue
-        for name, phrases in TYPES:
-            if any(phrase in line.lower() for phrase in phrases):
-                found.setdefault(int(seat), name)
-                break
-    return "Seat types: " + "; ".join(f"seat {seat} = {name}" for seat, name in sorted(found.items())) if found else ""
-
-
 _OLD_BLOCKS = (
     re.compile(r"CALL CHECKLIST.*?(?=\n\n|\Z)", re.DOTALL),  # a block has no blank line inside it
     re.compile(r"OPPONENT GUIDE.*?(?=\n\n|\Z)", re.DOTALL),
@@ -160,12 +142,14 @@ def notes_task(row: dict, block: str, show_block: bool, max_tokens: int) -> Task
         prompt[1] = prompt[1] | {"content": with_notes(prompt[1]["content"], block)}
     guide = "OPPONENT GUIDE" in block
     keep = KEEP_BOTH if guide else KEEP_PLAYBOOK if "PLAYBOOK" in block else KEEP
-    types = seat_types(prompt) if guide else ""
-    new = f"{block}\n\n{types + chr(10) if types else ''}{contents}"[:LIMIT]
+    if guide:
+        messages = [m["content"] for m in prompt[2:] if m.get("role") == "user" and isinstance(m.get("content"), str)]
+        contents = betting_evidence(messages, prompt[1]["content"])
+    new = f"{block}\n\n{contents}"[:LIMIT]
     call["arguments"] = json.dumps({"contents": new})
     for item in reply:  # a reasoning that already opens with the keep sentence gets it once
         if item.get("type") == "reasoning" and isinstance(item.get("content"), str):
-            item["content"] = item["content"].replace(KEEP_BOTH, "").replace(KEEP_PLAYBOOK, "").replace(KEEP, "").strip()
+            item["content"] = "" if guide else item["content"].replace(KEEP_PLAYBOOK, "").replace(KEEP, "").strip()
     lead_reasoning(reply, keep)
     kind = "first" if empty else "keep" if show_block else "restore"
     return close(prompt, reply, call, "Scratchpad updated.", f"checklist:notes:{kind}")
@@ -193,9 +177,9 @@ def decision_task(row: dict, block: str, held_out: set, max_tokens: int, need_bl
         return None, "against the playbook: " + ",".join(rule for rule, followed in rules if not followed)
     if arguments.get("talk") and playbook:
         return None, "talks"
-    if REPLACED and "PLAYBOOK" in prompt[1]["content"] and block not in prompt[1]["content"]:
-        if DROPPED_LINE_USE.search(json.dumps(reply)):
-            return None, "leans on a removed line"
+    if (REPLACED and "PLAYBOOK" in prompt[1]["content"] and block not in prompt[1]["content"]
+            and DROPPED_LINE_USE.search(json.dumps(reply))):
+        return None, "leans on a removed line"
     if need_block and REPLACED and REPLACED in prompt[1]["content"]:
         # the reply was written with an earlier wording of the block: show the current one, and drop replies that
         # lean on a line the current block no longer has

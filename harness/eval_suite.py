@@ -93,7 +93,10 @@ async def run(args: argparse.Namespace) -> None:
                          "--notes-file", notes, "--out", str(out / "notes_games")]
     if "games" not in args.skip and args.games:
         jobs["games"] = [python, "score_local.py", "--model", args.model, "--lineup", "arena", "--field-model", args.field_model,
-                         "--field-no-thinking", "--games", str(args.games), "--seed", str(args.seed),
+                         *(["--field-no-thinking"] if not args.field_thinking else []),
+                         *(["--arena-replays", str(args.arena_replays.resolve()), "--arena-entry", args.arena_entry]
+                           if args.arena_replays else []),
+                         "--games", str(args.games), "--seed", str(args.seed),
                          "--parallel", str(args.game_parallel), "--out", str(out / "games")]
     (out / "meta.json").write_text(json.dumps({"model": args.model, "notes_file": notes, "field_model": args.field_model,
                                                "games": args.games, "seed": args.seed, "jobs": list(jobs)}, indent=1))
@@ -131,6 +134,8 @@ def games(folder: Path) -> dict[int, dict]:
         out[int(log["session_info"]["seed"])] = {
             "place": log["ranking"]["places"][seat], "busted": log["eliminated_on_hand"].get(seat) is not None,
             "decisions": len(mine), "failed": sum(bool(a["model_response"].get("format_error")) for a in mine),
+            "house_count": len(log["house_opponents"]) if "house_opponents" in log else None,
+            "matchup": log.get("matchup") or (seat, log.get("lineup")),
         } | habits(log, seat)
     return out
 
@@ -231,6 +236,12 @@ def show(name: str, data: dict) -> None:
               f"failed decisions {n['failed']}/{n['decisions']}")
     if data["games"]:
         print("  games            :", games_summary(data["games"]))
+        with_house = [row for row in data["games"].values() if (row["house_count"] or 0) > 0]
+        teams_only = [row for row in data["games"].values() if row["house_count"] == 0]
+        for label, group in (("with house", with_house), ("all teams", teams_only)):
+            if group:
+                print(f"    {label:12} {len(group):3} games | {statistics.fmean(POINTS[row['place']] for row in group):+.3f} "
+                      f"pts/game | sixths {sum(row['place'] == 6 for row in group)} | busts {sum(row['busted'] for row in group)}")
 
 
 def report(args: argparse.Namespace) -> None:
@@ -245,7 +256,10 @@ def report(args: argparse.Namespace) -> None:
             mean, low, high = bootstrap([gain(candidate[key][i]) - gain(baseline[key][i]) for i in both], 1000)
             print(f"  {label:17}: {mean:+.1f} rating pts per 1000 [{low:+.0f}, {high:+.0f}] over {len(both)} shared decisions")
             verdicts.append((label, low, high))
-    seeds = sorted(set(candidate["games"]) & set(baseline["games"]))
+    shared = set(candidate["games"]) & set(baseline["games"])
+    seeds = sorted(s for s in shared if candidate["games"][s]["matchup"] == baseline["games"][s]["matchup"])
+    if len(shared) != len(seeds):
+        print(f"  skipped {len(shared) - len(seeds)} games with different opponent lineups or settings")
     if seeds:
         diffs = [POINTS[candidate["games"][s]["place"]] - POINTS[baseline["games"][s]["place"]] for s in seeds]
         mean, low, high = bootstrap(diffs)
@@ -254,6 +268,13 @@ def report(args: argparse.Namespace) -> None:
         t_mean, t_low, t_high = bootstrap([(candidate["games"][s]["place"] <= 3) - (baseline["games"][s]["place"] <= 3) for s in seeds], 100)
         print(f"  games            : {mean:+.3f} rating pts per game [{low:+.2f}, {high:+.2f}] over {len(seeds)} shared deals | "
               f"better {better}, same {len(seeds) - better - worse}, worse {worse} | top-three rate {t_mean:+.0f} points [{t_low:+.0f}, {t_high:+.0f}]")
+        for label, group in (
+            ("with house", [s for s in seeds if (candidate["games"][s]["house_count"] or 0) > 0]),
+            ("all teams", [s for s in seeds if candidate["games"][s]["house_count"] == 0]),
+        ):
+            if group:
+                effect, a, b = bootstrap([POINTS[candidate["games"][s]["place"]] - POINTS[baseline["games"][s]["place"]] for s in group])
+                print(f"    {label:12} {effect:+.3f} points/game [{a:+.2f}, {b:+.2f}] over {len(group)} paired games")
         verdicts.append(("games", low, high))
     for label, low, high in verdicts:
         print(f"  -> {label}: {'better' if low > 0 else 'worse' if high < 0 else 'no clear difference'}")
@@ -270,6 +291,9 @@ def main() -> None:
     r.add_argument("--open-spots", type=Path, default=Path("runs/open_spots.jsonl"))
     r.add_argument("--open-limit", type=int, default=600, help="how many held-out opening decisions to ask")
     r.add_argument("--field-model", default="vals-hackathon/v2-field", help="the deployment in the other model seats of the games")
+    r.add_argument("--field-thinking", action="store_true", help="enable thinking for the model opponents")
+    r.add_argument("--arena-replays", type=Path, help="use the house lineup and seats from public replay samples")
+    r.add_argument("--arena-entry", default="Friends", help="source entry name or org ID for replay lineups")
     r.add_argument("--games", type=int, default=48)
     r.add_argument("--seed", type=int, default=20261300)
     r.add_argument("--parallel", type=int, default=12, help="requests at once for each decision test")

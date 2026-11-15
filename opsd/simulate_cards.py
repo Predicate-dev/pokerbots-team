@@ -18,6 +18,7 @@ import price_card
 import terminal_calls as terminal
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "harness" / "src"))
+from poker_harness.arena_lineups import FIELD, ArenaRoster, recent_rosters  # noqa: E402
 from poker_harness.completions import EVENT_PARAMS, table_rules  # noqa: E402
 from poker_harness.engine.scripted import ARCHETYPES, ScriptedPlayer  # noqa: E402
 from poker_harness.engine.table import Decision, DecisionContext  # noqa: E402
@@ -148,7 +149,13 @@ class CardPlayer(HouseStylePlayer):
         return decision
 
 
-async def play(seed: int, lineup: str, arm: str, book: dict | None = None) -> dict:
+async def play(
+    seed: int,
+    lineup: str,
+    arm: str,
+    book: dict | None = None,
+    roster: ArenaRoster | None = None,
+) -> dict:
     rng = random.Random(seed)
     hero = rng.randrange(RULES.seats)
     styles = [style for style in HOUSE_STYLES if style != "house_pete"]
@@ -157,14 +164,20 @@ async def play(seed: int, lineup: str, arm: str, book: dict | None = None) -> di
     elif lineup == "tight":
         styles = ["nit", "nit", "house_alice", "house_bob", "house_tim"]
     rng.shuffle(styles)
+    if roster:
+        hero = roster.hero
     policy = CardPlayer(f"seat{hero}", seed, arm, book)
     players = []
+    house_count = 0
     for seat in range(RULES.seats):
         name = f"seat{seat}"
         if seat == hero:
             players.append(policy)
         else:
-            style = styles.pop()
+            style = roster.seats[seat] if roster else styles.pop()
+            house_count += style != FIELD if roster else style in HOUSE_STYLES
+            if style == FIELD:
+                style = rng.choice(ARCHETYPES)
             opponent = (
                 HouseStylePlayer(name, style, seed, talk_mode="muted")
                 if style in HOUSE_STYLES
@@ -184,17 +197,19 @@ async def play(seed: int, lineup: str, arm: str, book: dict | None = None) -> di
         "first_in_opportunities": policy.first_in,
         "opens": policy.opened,
         "range_decisions": policy.range_decisions,
+        "house_count": house_count,
+        "arena_roster": roster.match_id if roster else None,
     }
 
 
-def paired(job: tuple[int, str, dict | None]) -> list[dict]:
-    seed, lineup, book = job
+def paired(job: tuple[int, str, dict | None, ArenaRoster | None]) -> list[dict]:
+    seed, lineup, book, roster = job
     arms = (
         ("scripted", "placement_price", "open_and_placement", *RANGE_ARMS)
         if book
         else ARMS
     )
-    return [asyncio.run(play(seed, lineup, arm, book)) for arm in arms]
+    return [asyncio.run(play(seed, lineup, arm, book, roster)) for arm in arms]
 
 
 def summarize(pairs: list[list[dict]], control: str) -> dict:
@@ -238,7 +253,17 @@ def main() -> None:
     parser.add_argument(
         "--out", type=Path, default=Path("harness/runs/card-sims.jsonl")
     )
-    parser.add_argument("--lineups", choices=LINEUPS, nargs="+", default=LINEUPS)
+    parser.add_argument("--lineups", choices=(*LINEUPS, "arena"), nargs="+")
+    parser.add_argument(
+        "--arena-replays",
+        type=Path,
+        help="sample house seat assignments from recent public replays",
+    )
+    parser.add_argument(
+        "--arena-entry",
+        default="Friends",
+        help="entry name or org ID for the replay rosters",
+    )
     parser.add_argument(
         "--terminal-ranges",
         type=Path,
@@ -250,10 +275,29 @@ def main() -> None:
     book = (
         json.loads(args.terminal_ranges.read_text()) if args.terminal_ranges else None
     )
-    jobs = [
-        (args.seed + index * args.games + offset, lineup, book)
-        for index, lineup in enumerate(dict.fromkeys(args.lineups))
+    lineups = tuple(
+        dict.fromkeys(args.lineups or (("arena",) if args.arena_replays else LINEUPS))
+    )
+    if "arena" in lineups and not args.arena_replays:
+        parser.error("the arena lineup needs --arena-replays")
+    rosters = (
+        recent_rosters(args.arena_replays, args.arena_entry)
+        if "arena" in lineups
+        else ()
+    )
+    scheduled = [
+        (args.seed + index * args.games + offset, lineup)
+        for index, lineup in enumerate(lineups)
         for offset in range(args.games)
+    ]
+    jobs = [
+        (
+            seed,
+            lineup,
+            book,
+            random.Random(seed).choice(rosters) if lineup == "arena" else None,
+        )
+        for seed, lineup in scheduled
     ]
     pairs = []
     with ProcessPoolExecutor(args.workers) as pool:
@@ -267,8 +311,20 @@ def main() -> None:
     )
     groups = {"all": pairs} | {
         lineup: [pair for pair in pairs if pair[0]["lineup"] == lineup]
-        for lineup in args.lineups
+        for lineup in lineups
     }
+    if "arena" in groups:
+        for label, with_house in (
+            ("arena with house", True),
+            ("arena all teams", False),
+        ):
+            group = [
+                pair
+                for pair in groups["arena"]
+                if bool(pair[0]["house_count"]) == with_house
+            ]
+            if group:
+                groups[label] = group
     summary = {
         "seed": args.seed,
         "groups": {

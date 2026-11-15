@@ -14,6 +14,7 @@ from statistics import fmean
 
 import price_card
 import terminal_calls as terminal
+from poker_harness.arena_lineups import HOUSE_ENTRIES
 from poker_harness.completions import EVENT_PARAMS, table_rules
 from poker_harness.prompts import system_prompt
 from pokerkit import HandHistory
@@ -125,6 +126,7 @@ def archive_spots(args, rows: list[dict]) -> tuple[dict, list, Counter]:
     examples, stats = [], Counter()
     for match_id, items in by_match.items():
         match = json.loads((args.replays / f"{match_id}.json").read_text())
+        entries = {entry["seat"]: entry["entry"] for entry in match["seats"]}
         hands = {h["hand_number"]: h for h in match["hands"]}
         train = items[0]["split"] == "train"
         betting = {n: notes(h, counts if train else None) for n, h in hands.items()}
@@ -173,7 +175,10 @@ def archive_spots(args, rows: list[dict]) -> tuple[dict, list, Counter]:
                 }
             ):
                 continue  # on a non-all-in river, consider bluff catches and preserve strong value raises
-            examples.append((row, spot, villain, a["action"]))
+            opponent = entries[spot.villain]
+            house = opponent["kind"] == "house"
+            style = HOUSE_ENTRIES.get(opponent["id"], opponent["id"]) if house else "team"
+            examples.append((row | {"house": house, "opponent_style": style}, spot, villain, a["action"]))
     return dict(counts), examples, stats
 
 
@@ -309,16 +314,21 @@ def main() -> None:
             )
         )
     train = [r for r in scored if r["split"] == "train" and r["robust_action"]]
-    train = [sft_example(row) for row in train]
     result = {
         "payouts": dict(stats),
-        "labels": dict(Counter(r["action"]["action"] for r in train)),
+        "labels": dict(Counter(r["robust_action"] for r in train)),
+        "labels_by_opponent_style": dict(Counter(r["opponent_style"] for r in train)),
         "samples": args.samples,
         **{
             split: report([r for r in scored if r["split"] == split])
             for split in ("train", "select", "fresh")
         },
     }
+    result["fresh_by_opponent"] = {
+        label: report([r for r in scored if r["split"] == "fresh" and r["house"] == house])
+        for label, house in (("house", True), ("team", False))
+    }
+    train = [sft_example(row) for row in train]
     args.out.mkdir(parents=True, exist_ok=True)
     (args.out / "examples.jsonl").write_text(
         "".join(json.dumps(r) + "\n" for r in train)

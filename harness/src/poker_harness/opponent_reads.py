@@ -1,5 +1,10 @@
 """Training-only guidance shared by the scratchpad experiment and the OPSD teacher."""
 
+from __future__ import annotations
+
+import re
+from collections import defaultdict
+
 PLACEMENT_GUIDANCE = """Play for finishing place. Consider hands remaining, effective stacks, whether you cover
 the opponent, and which players you can realistically pass. Favor low-cost edges. Before risking much of your stack,
 weigh the price and plausible range against the effect of winning or losing on placement."""
@@ -18,3 +23,48 @@ Count at most one opportunity per seat per hand for each statistic. Count only o
 aggressive preflop all-in from a substantial stack separately from a short-stack shove or a call for all the chips.
 When the evidence is sparse or contradictory, record uncertain. Skip categories with unclear denominators.
 Keep the full replacement note concise and call update_scratchpad exactly once on cleanup."""
+
+_HERO = re.compile(r"\bYour seat: ([0-5])\b")
+_BETTING = re.compile(
+    r'^  (preflop|flop|turn|river): seat([0-5]) \(seat \2\) '
+    r'(fold|check|call|bet|raise)(?: to (\d+))?(?: and says: "[^"\n]*")?$', re.MULTILINE
+)
+_OBSERVATION = re.compile(
+    r"^seat ([0-5]) \| preflop (\d+)/(\d+) played \| opens/raises (\d+) \| big raises (\d+) "
+    r"\| postflop calls (\d+) \| postflop bets/raises (\d+)$", re.MULTILINE
+)
+
+
+def betting_evidence(messages: list[str], prior: str = "") -> str:
+    """Record observed actions once per seat per hand and keep the same counters across hands."""
+    text = "\n".join(messages)
+    hero = _HERO.search(text)
+    if hero is None:
+        return ""
+    hero = int(hero[1])
+    totals = {}
+    for record in _OBSERVATION.findall(prior):
+        seat, played, seen, raises, big, calls, bets = map(int, record)
+        if seat != hero and big <= raises <= played <= seen:
+            totals[seat] = [played, seen, raises, big, calls, bets]
+    actions = defaultdict(list)
+    for street, seat, action, amount in _BETTING.findall(text):
+        if int(seat) != hero:
+            actions[int(seat)].append((street, action, int(amount or 0)))
+    for seat, moves in actions.items():
+        pre = [(action, amount) for street, action, amount in moves if street == "preflop"]
+        post = [action for street, action, _ in moves if street != "preflop"]
+        increments = (
+            any(action in ("call", "raise") for action, _ in pre),
+            bool(pre),
+            any(action == "raise" for action, _ in pre),
+            any(action == "raise" and amount >= 100 for action, amount in pre),
+            "call" in post,
+            any(action in ("bet", "raise") for action in post),
+        )
+        totals[seat] = [a + b for a, b in zip(totals.get(seat, [0] * 6), increments, strict=True)]
+    return "\n".join(
+        f"seat {seat} | preflop {played}/{seen} played | opens/raises {raises} | big raises {big} "
+        f"| postflop calls {calls} | postflop bets/raises {bets}"
+        for seat, (played, seen, raises, big, calls, bets) in sorted(totals.items())
+    )

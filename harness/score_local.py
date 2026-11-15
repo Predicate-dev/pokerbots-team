@@ -21,6 +21,7 @@ from pathlib import Path
 
 import httpx
 
+from poker_harness.arena_lineups import FIELD, ArenaRoster, recent_rosters
 from poker_harness.balanced_play import BALANCED_PLAY
 from poker_harness.completions import GATEWAY_URL, cleanup_params, relay_completion, table_rules, with_preset
 from poker_harness.engine.scripted import ARCHETYPES, ScriptedPlayer
@@ -45,9 +46,7 @@ def with_preflop_reference(complete: Complete) -> Complete:
     return guided
 
 
-FIELD = "field"
-# How many of the five other seats were other teams' bots at this team's last 25 ranked tables (arena replays,
-# 2026-11-14 about 17:20 PT): (seats, games). The remaining seats are house-bot imitations.
+# Reproducible approximation for older comparisons. Use --arena-replays for the current house composition.
 ARENA_FIELD_SEATS = ((0, 5), (1, 3), (3, 5), (4, 10), (5, 2))
 
 
@@ -87,6 +86,7 @@ async def one_game(
     field_model: str = "",
     field_thinking: bool = True,
     keep_notes: str = "",
+    arena_rosters: tuple[ArenaRoster, ...] = (),
 ) -> dict:
     params = with_preset({"preset": "event", "seed": seed, "submit_fields": ["action", "amount"]})
     if hands:
@@ -97,16 +97,23 @@ async def one_game(
     rng = random.Random(seed)
     mine = rng.randrange(rules.seats)
     styles = rng.sample(HOUSE_STYLES, rules.seats - 1)
+    roster = None
     if lineup == "mixed":
         styles[-2:] = rng.sample(ARCHETYPES, 2)
         rng.shuffle(styles)
     if lineup == "arena":  # some seats are other teams' bots: `field_model` under the official prompt
-        field_seats = rng.choices(*zip(*ARENA_FIELD_SEATS, strict=True))[0]
-        styles[:field_seats] = [FIELD] * field_seats
-        rng.shuffle(styles)
+        if arena_rosters:
+            roster = random.Random(seed).choice(arena_rosters)
+            mine = roster.hero
+        else:
+            field_seats = rng.choices(*zip(*ARENA_FIELD_SEATS, strict=True))[0]
+            styles[:field_seats] = [FIELD] * field_seats
+            rng.shuffle(styles)
     label = params | {"model_label": model}
     players: list = []
     styles_by_seat = {}
+    field_by_seat = {}
+    house_by_seat = {}
     for seat in range(rules.seats):
         name = f"seat{seat}"
         if seat == mine:
@@ -126,11 +133,14 @@ async def one_game(
             players.append(scored)
             styles_by_seat[name] = "model"
         else:
-            style = styles.pop()
+            style = roster.seats[seat] if roster else styles.pop()
+            if roster and style != FIELD:
+                house_by_seat[name] = style
             if style == FIELD:
                 # Several deployments can share the field seats (comma-separated), so opponents don't queue on one GPU.
                 fields = [m.strip() for m in field_model.split(",") if m.strip()]
                 theirs_model = fields[(seed + seat) % len(fields)]
+                field_by_seat[name] = theirs_model
                 theirs = params | {"model_label": theirs_model}
                 if not field_thinking:  # about ten times fewer tokens per opponent decision, so games finish sooner
                     theirs = {k: v for k, v in theirs.items() if k != "chat_template_kwargs"} | {"thinking": False}
@@ -142,12 +152,20 @@ async def one_game(
             elif style in HOUSE_STYLES:
                 players.append(HouseStylePlayer(name, style, seed, talk_mode=talk_mode))
                 styles_by_seat[name] = style.removeprefix("house_")
+                house_by_seat[name] = style
             else:
                 players.append(ScriptedPlayer(name, style, seed))
                 styles_by_seat[name] = style
     log = await play_session(f"score-{seed}", seed, players, rules)
     log["scored_seat"] = f"seat{mine}"
     log["lineup"] = styles_by_seat
+    log["house_opponents"] = house_by_seat
+    log["arena_roster"] = roster.match_id if roster else None
+    log["matchup"] = {
+        "scored_seat": log["scored_seat"], "lineup": styles_by_seat, "field_models": field_by_seat,
+        "field_thinking": field_thinking if field_by_seat else None, "talk_mode": talk_mode,
+        "hands": rules.total_hands,
+    }
     return log
 
 
@@ -186,6 +204,7 @@ def summarize(log: dict) -> dict:
         "cleanup_updated": sum(turn["result"] == "updated" for turn in cleanup),
         "winner": min(log["ranking"]["places"], key=log["ranking"]["places"].get),
         "winner_style": log["lineup"][min(log["ranking"]["places"], key=log["ranking"]["places"].get)],
+        "house_count": len(log.get("house_opponents", {})),
     }
 
 
@@ -200,7 +219,7 @@ async def run(args: argparse.Namespace) -> list[dict]:
     if args.opponent_read_ablation:
         arms = {
             "control": PLACEMENT_GUIDANCE,
-            "opponent_reads": "\n\n".join((PLACEMENT_GUIDANCE, ACTION_GUIDANCE, CLEANUP_GUIDANCE)),
+            "opponent_reads": f"{PLACEMENT_GUIDANCE}\n\n{ACTION_GUIDANCE}\n\n{CLEANUP_GUIDANCE}",
         }
     elif args.table_talk_defense_ablation:
         arms = {"control": "", "table_talk_defense": f"{ACTION_DEFENSE}\n\n{CLEANUP_DEFENSE}"}
@@ -216,6 +235,7 @@ async def run(args: argparse.Namespace) -> list[dict]:
     for folder in folders.values():
         folder.mkdir(parents=True, exist_ok=True)
     keep_notes = args.keep_notes.read_text().strip() if args.keep_notes else ""
+    rosters = recent_rosters(args.arena_replays, args.arena_entry) if args.arena_replays else ()
     async with httpx.AsyncClient(timeout=httpx.Timeout(600.0, connect=30.0)) as client:
 
         async def guarded(seed: int, arm: str, guidance: str) -> dict:
@@ -225,6 +245,7 @@ async def run(args: argparse.Namespace) -> list[dict]:
                     client, key, model, seed, args.hands, guidance=guidance, talk_mode=args.talk_mode,
                     lineup=args.lineup, field_model=args.field_model, field_thinking=not args.field_no_thinking,
                     keep_notes=keep_notes if arm != "control" else "",
+                    arena_rosters=rosters,
                 )
             row = summarize(log) | {"arm": arm, "talk_mode": args.talk_mode, "deployment": model}
             log["experiment"] = {"arm": arm, "talk_mode": args.talk_mode, "deployment": model}
@@ -266,6 +287,12 @@ def print_summary(label: str, rows: list[dict]) -> None:
         counts = [row["preflop_spots"][tag] for row in rows if tag in row["preflop_spots"]]
         if counts:
             print(f"  {tag} folds {sum(c['folds'] for c in counts)}/{sum(c['opportunities'] for c in counts)}")
+    for group_name, have_house in (("with house", True), ("all teams", False)):
+        group = [row for row in rows if "house_count" in row and bool(row["house_count"]) == have_house]
+        if group:
+            print(f"  {group_name}: {len(group)} games | {statistics.fmean(r['rating_points'] for r in group):+.3f} "
+                  f"points/game | sixths {sum(r['place'] == 6 for r in group)} | "
+                  f"busts {sum(r['busted_on'] is not None for r in group)}")
 
 
 def main() -> None:
@@ -293,6 +320,8 @@ def main() -> None:
     parser.add_argument("--field-model", default="vals-hackathon/entry",
                         help="deployment(s) that play the other teams' seats with --lineup arena, comma-separated to spread "
                              "the load (default: base Qwen)")
+    parser.add_argument("--arena-replays", type=Path, help="with --lineup arena, sample real house rosters from recent public replays")
+    parser.add_argument("--arena-entry", default="Friends", help="entry name or org ID for the replay lineups")
     parser.add_argument("--keep-notes", type=Path,
                         help="preview a notes block: keep this text in the model's scratchpad after its first hand, "
                              "as a model trained to keep it would")
@@ -303,6 +332,8 @@ def main() -> None:
         parser.error("--games, --parallel and --hands must be positive")
     if args.opponent_read_ablation and args.hands == 1:
         parser.error("the opponent-read ablation needs at least two hands")
+    if args.arena_replays and args.lineup != "arena":
+        parser.error("--arena-replays requires --lineup arena")
     rows = asyncio.run(run(args))
     for arm in dict.fromkeys(row["arm"] for row in rows):
         group = [row for row in rows if row["arm"] == arm]

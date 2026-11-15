@@ -22,6 +22,14 @@ The reward compares continuing with folding, in chips, from the seat's real equi
 broke means finishing last or next to last, which the arena's rating punishes far more than it rewards a win. Because
 the reward uses equity and not the cards that fell, sixteen samples of the same puzzle are scored on the decision
 alone: every sample that continues gets the same score, every sample that folds gets 6.
+
+A label may instead carry `values`: what folding, calling and losing, and calling and winning are each worth to the
+seat's finishing place, in rating points (from `opsd/price_card.py`'s stack-value table). The reward is then in
+rating points, not chips, so busting early costs what it really costs and a late call with players already out is
+priced fairly:
+
+    gain(continue) = equity * values.win + (1 - equity) * values.lose - values.fold
+    score = 6 + clip(gain / 0.1 rating points, -5, +5)
 """
 
 from __future__ import annotations
@@ -35,6 +43,7 @@ from .prompts import TableRules
 from .seat import Complete, Completion, ModelSeat
 
 SCALE_CHIPS = 10.0  # chips of value per reward point
+SCALE_RATING = 0.1  # rating points of value per reward point, for labels with `values`
 FOLD_SCORE, FAILURE_SCORE = 6.0, 0.0
 _SCRIPTED = {
     "provider": "replay", "latency_seconds": 0.0, "in_tokens": 0, "out_tokens": 0, "reasoning_tokens": 0,
@@ -83,6 +92,11 @@ def check_puzzle(puzzle: Any, seats: int) -> dict[str, Any]:
             raise PuzzleError(f"env_params.puzzle.label.{key} must be a number")
     if not 0 <= label["equity"] <= 1 or label["to_call"] <= 0 or label["pot"] <= 0:
         raise PuzzleError("env_params.puzzle.label is out of range")
+    values = label.get("values")
+    if values is not None and not (
+        isinstance(values, dict) and all(isinstance(values.get(key), (int, float)) for key in ("fold", "lose", "win"))
+    ):
+        raise PuzzleError("env_params.puzzle.label.values needs fold, lose and win as numbers")
     return puzzle
 
 
@@ -146,23 +160,37 @@ def puzzle_value(label: dict[str, Any]) -> float:
     return equity * float(label["pot"]) - (1 - equity) * float(label["to_call"]) * risk
 
 
+def puzzle_gain(label: dict[str, Any]) -> float:
+    """Rating points continuing is worth over folding, for a label with `values`."""
+    equity, values = float(label["equity"]), label["values"]
+    return equity * float(values["win"]) + (1 - equity) * float(values["lose"]) - float(values["fold"])
+
+
 def grade_puzzle(log: dict[str, Any]) -> dict[str, Any]:
     result = log["puzzle_result"]
     label, answer = result["label"], result["answer"]
-    value = puzzle_value(label)
+    rated = label.get("values") is not None
+    value = puzzle_gain(label) if rated else puzzle_value(label)
+    scale, unit = (SCALE_RATING, "rating points") if rated else (SCALE_CHIPS, "chips")
     if answer == "invalid":
         score = FAILURE_SCORE
     elif answer == "fold":
         score = FOLD_SCORE
     else:
-        score = FOLD_SCORE + max(-5.0, min(5.0, value / SCALE_CHIPS))
+        score = FOLD_SCORE + max(-5.0, min(5.0, value / scale))
     best = "continue" if value > 0 else "fold"
+    detail = (
+        f"fold {label['values']['fold']:+.2f}, lose {label['values']['lose']:+.2f}, win {label['values']['win']:+.2f}"
+        if rated else f"risk {label.get('risk', 1.0)}"
+    )
+    artifacts = {
+        "reward": "puzzle-rating" if rated else "puzzle", "answer": answer, "best": best, "correct": answer == best,
+        "equity": label["equity"], "to_call": label["to_call"], "pot": label["pot"], "risk": label.get("risk", 1.0),
+    }
+    artifacts["value_rating" if rated else "value_chips"] = value
     return {
         "score": score,
-        "reasoning": f"Puzzle: answered {answer}; continuing was worth {value:+.1f} chips (equity {label['equity']:.2f}, "
-        f"{label['to_call']} to call into {label['pot']}, risk {label.get('risk', 1.0)}), so the best answer was {best}.",
-        "artifacts": {
-            "reward": "puzzle", "answer": answer, "best": best, "correct": answer == best, "value_chips": value,
-            "equity": label["equity"], "to_call": label["to_call"], "pot": label["pot"], "risk": label.get("risk", 1.0),
-        },
+        "reasoning": f"Puzzle: answered {answer}; continuing was worth {value:+.2f} {unit} (equity {label['equity']:.2f}, "
+        f"{label['to_call']} to call into {label['pot']}, {detail}), so the best answer was {best}.",
+        "artifacts": artifacts,
     }

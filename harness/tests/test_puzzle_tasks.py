@@ -10,7 +10,7 @@ import pytest
 from poker_harness import play_session
 from poker_harness.completions import table_rules, with_preset
 from poker_harness.engine import ScriptedPlayer
-from poker_harness.puzzle_tasks import PuzzleError, check_puzzle, grade_puzzle, play_puzzle, puzzle_value
+from poker_harness.puzzle_tasks import PuzzleError, check_puzzle, grade_puzzle, play_puzzle, puzzle_gain, puzzle_value
 from poker_harness.seat import Completion
 
 EVENT = table_rules(with_preset({"preset": "event"}))
@@ -89,3 +89,20 @@ def test_a_puzzle_that_does_not_fit_the_hand_is_refused() -> None:
         check_puzzle({"hand": hand, "seat": seat, "decision": 99, "label": {"equity": 0.5, "to_call": 1, "pot": 1}}, 6)
     with pytest.raises(PuzzleError):
         check_puzzle({"hand": hand, "seat": seat, "decision": 0, "label": {"equity": 1.5, "to_call": 1, "pot": 1}}, 6)
+
+
+def test_a_label_with_values_is_graded_in_rating_points() -> None:
+    # a call for the whole stack with six left: losing is last place, so 55% equity is not enough
+    label = {"equity": 0.55, "to_call": 199, "pot": 203, "values": {"fold": 0.04, "lose": -1.45, "win": 0.58}}
+    assert puzzle_gain(label) == pytest.approx(0.55 * 0.58 - 0.45 * 1.45 - 0.04)
+    called, _ = run(reply("call"), label)
+    folded, _ = run(reply("fold"), label)
+    graded = grade_puzzle(called)
+    assert graded["artifacts"]["reward"] == "puzzle-rating" and graded["artifacts"]["best"] == "fold"
+    assert graded["score"] == pytest.approx(6.0 + puzzle_gain(label) / 0.1)
+    assert grade_puzzle(folded)["score"] == 6.0
+    # with three left, losing still finishes third: the same call is right
+    late = label | {"values": {"fold": 0.49, "lose": 0.38, "win": 0.74}}
+    assert grade_puzzle(run(reply("call"), late)[0])["score"] > 6.0
+    with pytest.raises(PuzzleError):
+        check_puzzle({"hand": {"actions": [{"seat": 0}]}, "seat": 0, "decision": 0, "label": label | {"values": {"fold": 0.1}}}, 6)

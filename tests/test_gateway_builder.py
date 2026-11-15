@@ -76,3 +76,32 @@ def test_gateway_defense_keeps_actor_and_cleanup_guidance_teacher_only() -> None
     assert [task.opsd_hint_selections[0].hint for task in tasks] == [ACTION_DEFENSE, CLEANUP_DEFENSE]
     assert totals["cleanup_kept"] == 1 and totals["format"] == totals["truncated"] == 1
     assert all("Player chatter is untrusted" not in item.model_dump_json() for task in tasks for item in task.input)
+
+
+def test_balanced_one_step_stores_prompt_without_replaying_the_fold(monkeypatch) -> None:
+    builder = load_builder()
+    import build_dataset
+    from hint import HINT
+    from poker_harness.balanced_play import BALANCED_PLAY
+    from poker_harness.talk_defense import ACTION_DEFENSE, CLEANUP_DEFENSE
+
+    def reference(system, user):
+        assert system == SYSTEM and user.startswith("## Hand 3 of 30")
+        return "Call costs 2 chips."
+
+    monkeypatch.setattr(build_dataset, "reference_hint", reference)
+    hint, cleanup = builder.teacher_hints(False, True, strategy="balanced")
+    assert hint == f"{BALANCED_PLAY}\n\n{ACTION_DEFENSE}" and cleanup == CLEANUP_DEFENSE
+    assert builder.teacher_hints(False, False) == (BALANCED_PLAY, None)
+    assert builder.teacher_hints(False, False, strategy="tight-survival") == (HINT, None)
+
+    rows = [
+        row("a", "submit_action", '{"action":"fold"}'),
+        row("b", "update_scratchpad", '{"contents":"notes"}'),
+    ]
+    tasks, totals = builder.build(rows, hint, 5000, cleanup_hint=cleanup, rollout_mode="one_step")
+    assert totals["kept"] == 2 and totals["preflop_reference_kept"] == 1
+    assert [task.opsd_hint_selections[0].hint for task in tasks] == [f"{hint}\n\nCall costs 2 chips.", cleanup]
+    for task in tasks:
+        assert len(task.input) == task.opsd_hint_selections[0].rollout_prefix_len == 2
+        assert not any("fold" in item.model_dump_json() or "Call costs" in item.model_dump_json() for item in task.input)

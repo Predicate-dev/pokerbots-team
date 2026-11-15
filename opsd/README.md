@@ -5,7 +5,55 @@ weights. Offline OPSD (on-policy self-distillation) puts it there: the teacher i
 system prompt, the student is the same model without it, and training pulls the student's token distribution
 toward the teacher's on replies the base model actually wrote.
 
-[`hint.py`](hint.py) holds a deliberately generic tight-aggressive hint. Writing a better one is the point.
+The default teacher uses position, effective stack, pot odds, and remaining hands. Select `--strategy tight-survival`
+to reproduce the original hint in [`hint.py`](hint.py).
+
+## Test the balanced strategy
+
+The guidance applies position-sensitive opening, big-blind defense against small raises, and placement adjustments.
+For a big blind facing a single open up to 3 BB with two seats left in the hand and chips behind, the teacher compares
+the price with simulated check-down equity against three blocker-adjusted opening ranges. Each range adds combinations
+to the previous one. This estimates how much equity the call would need to realize after future betting. Its range
+widths are illustrative and the primary score for the full game is still finishing place.
+[Pluribus](https://noambrown.com/papers/19-Science-Superhuman.pdf),
+[Computing Robust Counter-Strategies](https://poker.cs.ualberta.ca/publications/NIPS07-rnash.pdf).
+
+First compare the hint and the official prompt using the same model, deck seeds, seats, and lineups. Then repeat
+with unused seeds and another lineup.
+
+```bash
+# From harness/
+uv run python score_local.py --model vals-hackathon/base --balanced-play-ablation \
+  --games 24 --lineup mixed --out runs/balanced-pilot
+uv run python score_local.py --model vals-hackathon/base --balanced-play-ablation \
+  --games 24 --seed 960510 --lineup house --out runs/balanced-holdout
+```
+
+Collect source traces on separate training deals. Keep seeds and complete source games out of the pilot and
+holdout sets. Use a dedicated trace-source deployment with the gateway builder to keep evaluation calls out of
+the training dataset. One-step OPSD samples a fresh student action given each saved context.
+
+```bash
+# From the repository root. Both commands preview by default or with --dry-run.
+uv run python opsd/build_from_gateway.py --deployment-id <train-infer-id> \
+  --dataset pokerbots-balanced-one-step --strategy balanced --rollout-mode one_step \
+  --opponent-reads --table-talk-defense
+uv run python opsd/train.py --dataset pokerbots-balanced-one-step --rollout-mode one_step --dry-run
+```
+
+Review the builder's `preflop_reference_kept` count to verify coverage of the blind-defense comparison.
+After reviewing the dataset, rerun the builder with `--upload` and the trainer without `--dry-run`. Compare
+each candidate checkpoint under the official prompt to both earlier deployments on held-out full games.
+
+```bash
+# From harness/
+uv run python score_local.py --model vals-hackathon/candidate --compare-model vals-hackathon/base \
+  --games 48 --seed 173050 --lineup mixed --out runs/candidate-vs-base
+```
+
+Use a fresh seed block after selecting the checkpoint. Compare paired placement, busts, failed actions, and
+folds in the flagged spots. Check the counts and review individual decisions before attributing a fold-rate
+change to better play.
 
 ## Run
 
@@ -33,7 +81,8 @@ toward the teacher's on replies the base model actually wrote.
 There is no trace-to-`HintedTask` helper, so `build_dataset.py` builds the tasks itself. Each policy decision
 becomes one task:
 
-- `input`: the decision's prompt followed by the reply base wrote (its reasoning, text and `submit_action` call);
+- `input`: the decision's prompt. Offline mode also stores the reply base wrote (its reasoning, text and
+  `submit_action` call);
 - `opsd_hint_selections`: one `HintSelection` with `rollout_prefix_len` at the end of the prompt and
   `HintMutation(item_boundary=1, action="append_to_previous_item")`, which appends the hint to the system message
   for the teacher only;
@@ -130,6 +179,5 @@ Use base-model traces from training games. The action hint teaches the model to 
 The cleanup hint teaches it to keep player prose out of the scratchpad. Check `cleanup_kept` and review a sample
 of both turn types before uploading. Use `--opponent-reads` as well if the experiment calls for both forms of guidance.
 
-It keeps the same decisions as `build_dataset.py` (one `submit_action` call, under the token cap) and skips
-scratchpad turns and non-poker requests. Use the base deployment's id only: offline OPSD replays the base model's
-own tokens. `--since <UTC time>` limits it to recent requests.
+The gateway builder uses the same action filters as `build_dataset.py`. Use the training base deployment for
+offline mode, which replays its own response tokens. `--since <UTC time>` limits the source to recent requests.

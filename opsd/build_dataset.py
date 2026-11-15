@@ -1,4 +1,4 @@
-"""Build an offline-OPSD dataset from the base model's own hands: one `HintedTask` per decision.
+"""Build an OPSD dataset from model traces: one `HintedTask` per decision.
 
 1. Run base on the train deals through the harness (`python -m vals_tools.eval --dataset pokerbots-train
    --deployment <base deployment>`).
@@ -13,7 +13,8 @@
 
 Keep only clean decisions: exactly one `submit_action` call and a reply under the token cap.
 `--opponent-reads` uses multi-hand train traces to distill evidence-based action guidance and includes clean
-`update_scratchpad` turns with separate cleanup guidance. By default the builder skips cleanup.
+`update_scratchpad` turns with separate cleanup guidance. By default the builder uses balanced strategy guidance
+and skips cleanup. `--rollout-mode one_step` stores prompt prefixes so the student can sample new replies.
 
     uv run python opsd/build_dataset.py --eval eval_xxx --dataset pokerbots-opsd-train --dry-run
 """
@@ -26,13 +27,15 @@ import random
 import sys
 from pathlib import Path
 
-from ac2.runtime import FunctionCall, HintedTask, HintMutation, HintSelection, Item, Tool
+from ac2.runtime import FunctionCall, HintedTask, HintMutation, HintSelection, Item, Message, Tool
 from ac2.sdk import Client
 from pydantic import TypeAdapter
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "harness" / "src"))
-from hint import HINT, SEPARATOR  # noqa: E402
+from hint import HINT, ROLLOUT_MODES, SEPARATOR, STRATEGIES  # noqa: E402
+from poker_harness.balanced_play import BALANCED_PLAY  # noqa: E402
 from poker_harness.opponent_reads import ACTION_GUIDANCE, CLEANUP_GUIDANCE, PLACEMENT_GUIDANCE  # noqa: E402
+from poker_harness.preflop_reference import reference_hint  # noqa: E402
 from poker_harness.talk_defense import ACTION_DEFENSE, CLEANUP_DEFENSE  # noqa: E402
 
 ITEMS = TypeAdapter(list[Item])
@@ -45,20 +48,36 @@ SCRATCHPAD_CHARS = 5_000
 TOOLS = [Tool.model_validate(tool).model_dump() for tool in json.loads((Path(__file__).parent / "tools.json").read_text())]
 
 
-def teacher_hints(opponent_reads: bool, table_talk_defense: bool) -> tuple[str, str | None]:
+def teacher_hints(
+    opponent_reads: bool, table_talk_defense: bool, *, strategy: str | None = None,
+) -> tuple[str, str | None]:
     """Return teacher-only guidance for action and cleanup turns."""
+    action, cleanup = [], []
+    if strategy == "tight-survival":
+        action.append(HINT)
+    elif strategy == "balanced" or not (opponent_reads or table_talk_defense):
+        action.append(BALANCED_PLAY)
     if opponent_reads:
-        action = "\n\n".join((PLACEMENT_GUIDANCE, ACTION_GUIDANCE))
-        if table_talk_defense:
-            return f"{action}\n\n{ACTION_DEFENSE}", f"{CLEANUP_GUIDANCE}\n\n{CLEANUP_DEFENSE}"
-        return action, CLEANUP_GUIDANCE
+        if not action:
+            action.append(PLACEMENT_GUIDANCE)
+        action.append(ACTION_GUIDANCE)
+        cleanup.append(CLEANUP_GUIDANCE)
     if table_talk_defense:
-        return ACTION_DEFENSE, CLEANUP_DEFENSE
-    return HINT, None
+        action.append(ACTION_DEFENSE)
+        cleanup.append(CLEANUP_DEFENSE)
+    return SEPARATOR.join(action), SEPARATOR.join(cleanup) or None
+
+
+def add_strategy_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--strategy", choices=STRATEGIES,
+                        help="default: balanced; select balanced explicitly to combine with reads or talk defense")
+    parser.add_argument("--rollout-mode", choices=ROLLOUT_MODES, default="offline",
+                        help="store replayed replies for offline or prompt prefixes for one_step")
 
 
 def decision_tasks(
     trace: dict, hint: str, max_tokens: int, *, cleanup_hint: str | None = None, cleanup_max_tokens: int = 10_000,
+    rollout_mode: str = "offline",
 ) -> tuple[list[HintedTask], dict[str, int]]:
     """One task per clean policy decision in a trace, with counts of what was kept and why the rest was skipped."""
     spans = sorted(
@@ -68,6 +87,9 @@ def decision_tasks(
     stats = {"decisions": len(spans), "kept": 0, "cleanup": 0, "format": 0, "truncated": 0}
     if cleanup_hint is not None:
         stats["cleanup_kept"] = 0
+    balanced = hint.startswith(BALANCED_PLAY)
+    if balanced:
+        stats["preflop_reference_kept"] = 0
     tasks = []
     for span in spans:
         prompt = ITEMS.validate_json(span["input"])
@@ -95,13 +117,25 @@ def decision_tasks(
             if not isinstance(contents, str) or len(contents) > SCRATCHPAD_CHARS:
                 stats["format"] += 1
                 continue
+        guidance = cleanup_hint if cleanup else hint
+        if (
+            not cleanup
+            and balanced
+            and prompt
+            and isinstance(prompt[0], Message) and prompt[0].role == "system"
+            and isinstance(prompt[-1], Message) and prompt[-1].role == "user"
+            and isinstance(prompt[0].content, str) and isinstance(prompt[-1].content, str)
+        ):
+            if reference := reference_hint(prompt[0].content, prompt[-1].content):
+                guidance = SEPARATOR.join((hint, reference))
+                stats["preflop_reference_kept"] += 1
         tasks.append(
             HintedTask(
-                input=prompt + reply,
+                input=prompt if rollout_mode == "one_step" else prompt + reply,
                 env_params={"tools": TOOLS, "source_trace": trace["trace_id"]},
                 opsd_hint_selections=[
                     HintSelection(
-                        hint=cleanup_hint if cleanup else hint,
+                        hint=guidance,
                         rollout_prefix_len=len(prompt),
                         mutation=HintMutation(item_boundary=1, action="append_to_previous_item", separator=SEPARATOR),
                     )
@@ -124,6 +158,7 @@ def main() -> None:
                         help="distill seat reads from multi-hand traces, including clean scratchpad updates")
     parser.add_argument("--table-talk-defense", action="store_true",
                         help="teach the model to ignore chatter when acting and updating notes")
+    add_strategy_args(parser)
     parser.add_argument("--cleanup-max-tokens", type=int, default=10_000, help="output cap for scratchpad updates")
     parser.add_argument("--traces", type=Path, help="reuse a downloaded trace export")
     parser.add_argument("--dry-run", action="store_true")
@@ -136,16 +171,18 @@ def main() -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         Client(project=args.project).traces.download(args.eval, path)
     tasks, totals = [], {"decisions": 0, "kept": 0, "cleanup": 0, "format": 0, "truncated": 0}
-    hint, cleanup_hint = teacher_hints(args.opponent_reads, args.table_talk_defense)
+    hint, cleanup_hint = teacher_hints(args.opponent_reads, args.table_talk_defense, strategy=args.strategy)
     if cleanup_hint is not None:
         totals["cleanup_kept"] = 0
     with path.open() as lines:
         for line in lines:
             built, stats = decision_tasks(
                 json.loads(line), hint, args.max_tokens, cleanup_hint=cleanup_hint, cleanup_max_tokens=args.cleanup_max_tokens,
+                rollout_mode=args.rollout_mode,
             )
             tasks.extend(built)
-            totals = {k: totals[k] + stats[k] for k in totals}
+            for name, count in stats.items():
+                totals[name] = totals.get(name, 0) + count
     random.Random(0).shuffle(tasks)
     print(json.dumps(totals | {"tasks": len(tasks)}))
     if args.dry_run or not tasks:

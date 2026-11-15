@@ -21,14 +21,27 @@ from pathlib import Path
 
 import httpx
 
+from poker_harness.balanced_play import BALANCED_PLAY
 from poker_harness.completions import GATEWAY_URL, cleanup_params, relay_completion, table_rules, with_preset
 from poker_harness.engine.scripted import ARCHETYPES, ScriptedPlayer
 from poker_harness.game import play_session
 from poker_harness.house_bots import HOUSE_STYLES, TALK_MODES, HouseStylePlayer
 from poker_harness.opponent_reads import ACTION_GUIDANCE, CLEANUP_GUIDANCE, PLACEMENT_GUIDANCE
+from poker_harness.preflop import PreflopAction, opportunities, record_folds
+from poker_harness.preflop_reference import reference_hint
 from poker_harness.prompts import talk_fields
-from poker_harness.seat import ModelSeat
+from poker_harness.seat import Complete, Completion, Message, ModelSeat
 from poker_harness.talk_defense import ACTION_DEFENSE, CLEANUP_DEFENSE
+
+
+def with_preflop_reference(complete: Complete) -> Complete:
+    async def guided(messages: list[Message]) -> str | Completion:
+        system, user = messages[0]["content"], messages[-1]["content"]
+        if reference := await asyncio.to_thread(reference_hint, system, user):
+            messages = [messages[0] | {"content": f"{system}\n\n{reference}"}, *messages[1:]]
+        return await complete(messages)
+
+    return guided
 
 
 async def one_game(
@@ -60,10 +73,13 @@ async def one_game(
     for seat in range(rules.seats):
         name = f"seat{seat}"
         if seat == mine:
+            complete = relay_completion(client, GATEWAY_URL, key, label)
+            if guidance == BALANCED_PLAY:
+                complete = with_preflop_reference(complete)
             players.append(
                 ModelSeat(
                     name,
-                    relay_completion(client, GATEWAY_URL, key, label),
+                    complete,
                     rules,
                     model=model,
                     cleanup_complete=relay_completion(client, GATEWAY_URL, key, cleanup_params(label)),
@@ -88,6 +104,19 @@ async def one_game(
 def summarize(log: dict) -> dict:
     seat = log["scored_seat"]
     mine = [a for hand in log["hands"] for a in hand["actions"] if a["player"] == seat]
+    preflop_spots = {}
+    for hand in log["hands"]:
+        preflop = [a for a in hand["actions"] if a["street"] == "preflop"]
+        dealt = [player["seat"] for player in hand["starting_state"].values()]
+        moves = (
+            PreflopAction(a["seat"], a["action"]["type"], a["call_amount"], a["action"].get("amount"))
+            for a in preflop
+        )
+        spots = opportunities(moves, dealt, hand["button_seat"], log["session_info"]["big_blind"])
+        for action, tags in zip(preflop, spots, strict=True):
+            response = action["model_response"]
+            if action["player"] == seat and not (response.get("format_error") or response.get("fallback_used")):
+                record_folds(preflop_spots, tags, action["action"]["type"])
     cleanup = [
         hand["cleanup"] for hand in log.get("private", {}).get(seat, {}).get("hands", {}).values() if "cleanup" in hand
     ]
@@ -100,6 +129,8 @@ def summarize(log: dict) -> dict:
         "hands": len(log["hands"]),
         "decisions": len(mine),
         "failed": sum(bool(a["model_response"].get("format_error")) for a in mine),
+        "fallbacks": sum(bool(a["model_response"].get("fallback_used")) for a in mine),
+        "preflop_spots": preflop_spots,
         "cleanup_turns": len(cleanup),
         "cleanup_updated": sum(turn["result"] == "updated" for turn in cleanup),
         "winner": min(log["ranking"]["places"], key=log["ranking"]["places"].get),
@@ -122,19 +153,24 @@ async def run(args: argparse.Namespace) -> list[dict]:
         }
     elif args.table_talk_defense_ablation:
         arms = {"control": "", "table_talk_defense": f"{ACTION_DEFENSE}\n\n{CLEANUP_DEFENSE}"}
+    elif args.balanced_play_ablation:
+        arms = {"control": "", "balanced_play": BALANCED_PLAY}
+    elif args.compare_model:
+        arms = {"control": "", "candidate": ""}
     folders = {arm: args.out / arm if len(arms) > 1 else args.out for arm in arms}
     for folder in folders.values():
         folder.mkdir(parents=True, exist_ok=True)
     async with httpx.AsyncClient(timeout=httpx.Timeout(600.0, connect=30.0)) as client:
 
         async def guarded(seed: int, arm: str, guidance: str) -> dict:
+            model = args.compare_model if args.compare_model and arm == "control" else args.model
             async with gate:
                 log = await one_game(
-                    client, key, args.model, seed, args.hands, guidance=guidance, talk_mode=args.talk_mode,
+                    client, key, model, seed, args.hands, guidance=guidance, talk_mode=args.talk_mode,
                     lineup=args.lineup,
                 )
-            row = summarize(log) | {"arm": arm, "talk_mode": args.talk_mode}
-            log["experiment"] = {"arm": arm, "talk_mode": args.talk_mode, "deployment": args.model}
+            row = summarize(log) | {"arm": arm, "talk_mode": args.talk_mode, "deployment": model}
+            log["experiment"] = {"arm": arm, "talk_mode": args.talk_mode, "deployment": model}
             (folders[arm] / f"{log['game_id']}.json").write_text(json.dumps(log, indent=1))
             print(json.dumps(row), flush=True)
             return row
@@ -166,6 +202,10 @@ def print_summary(label: str, rows: list[dict]) -> None:
         f"mean chips {sum(r['chips'] for r in rows) / n:.0f} | failed decisions {sum(r['failed'] for r in rows)}/{decisions} | "
         f"cleanup updated {sum(r['cleanup_updated'] for r in rows)}/{sum(r['cleanup_turns'] for r in rows)}"
     )
+    for tag in ("button_first_in", "single_open_le_3bb", "bb_vs_late_small_open"):
+        counts = [row["preflop_spots"][tag] for row in rows if tag in row["preflop_spots"]]
+        if counts:
+            print(f"  {tag} folds {sum(c['folds'] for c in counts)}/{sum(c['opportunities'] for c in counts)}")
 
 
 def main() -> None:
@@ -181,6 +221,9 @@ def main() -> None:
                            help="run two arms per seed with the same placement guidance, adding seat reads to one arm")
     ablations.add_argument("--table-talk-defense-ablation", action="store_true",
                            help="compare the official prompt with extra instructions to ignore chatter")
+    ablations.add_argument("--balanced-play-ablation", action="store_true",
+                           help="compare the official prompt with balanced strategy guidance before training")
+    ablations.add_argument("--compare-model", help="baseline deployment to pair against --model on the official prompt")
     parser.add_argument("--talk-mode", choices=TALK_MODES, default="normal", help="scripted opponents' table talk")
     parser.add_argument("--lineup", choices=("house", "mixed"), default="house",
                         help="mixed replaces two house imitations with generic scripted opponents")
@@ -191,11 +234,16 @@ def main() -> None:
         parser.error("the opponent-read ablation needs at least two hands")
     rows = asyncio.run(run(args))
     for arm in dict.fromkeys(row["arm"] for row in rows):
-        print_summary(f"{args.model} ({arm})", [row for row in rows if row["arm"] == arm])
+        group = [row for row in rows if row["arm"] == arm]
+        print_summary(f"{group[0]['deployment']} ({arm})", group)
     if args.opponent_read_ablation:
         print(json.dumps(compare_arms(rows)))
     elif args.table_talk_defense_ablation:
         print(json.dumps(compare_arms(rows, "table_talk_defense")))
+    elif args.balanced_play_ablation:
+        print(json.dumps(compare_arms(rows, "balanced_play")))
+    elif args.compare_model:
+        print(json.dumps(compare_arms(rows, "candidate")))
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@ from pathlib import Path
 import httpx
 import pytest
 from fastapi import FastAPI, Request
+from poker_harness.balanced_play import BALANCED_PLAY
 from poker_harness.completions import table_rules, with_preset
 from poker_harness.game import play_session
 from poker_harness.house_bots import HOUSE_STYLES, HouseStylePlayer
@@ -31,15 +32,17 @@ async def test_talk_modes_keep_the_same_betting_policy() -> None:
     assert [a["say"] for a in actions["shuffled"]] != [a["say"] for a in actions["normal"]]
 
 
-@pytest.mark.parametrize("arm", ["opponent_reads", "table_talk_defense"])
+@pytest.mark.parametrize("arm", ["opponent_reads", "table_talk_defense", "balanced_play", "candidate"])
 def test_ablation_plays_paired_games_and_keeps_logs_separate(monkeypatch, tmp_path, capsys, arm: str) -> None:
     app = FastAPI()
     systems = set()
+    models = set()
 
     @app.post("/v1/chat/completions")
     async def complete(request: Request) -> dict:
         body = await request.json()
-        systems.add(body["messages"][0]["content"])
+        systems.add(body["messages"][0]["content"].partition("\n\nFor this blind defense")[0])
+        models.add(body["model"])
         cleanup = "Now call update_scratchpad" in body["messages"][-1].get("content", "")
         name = "update_scratchpad" if cleanup else "submit_action"
         args = {"contents": "seat 3 uncertain"} if cleanup else {"action": "call"}
@@ -54,23 +57,31 @@ def test_ablation_plays_paired_games_and_keeps_logs_separate(monkeypatch, tmp_pa
     monkeypatch.setattr(score_local.httpx, "AsyncClient", local_client)
     monkeypatch.setattr(score_local, "GATEWAY_URL", "http://gw/v1")
     monkeypatch.setenv("AC2_API_KEY", "test-key")
-    flag = "--opponent-read-ablation" if arm == "opponent_reads" else "--table-talk-defense-ablation"
+    flags = {
+        "opponent_reads": ["--opponent-read-ablation"],
+        "table_talk_defense": ["--table-talk-defense-ablation"],
+        "balanced_play": ["--balanced-play-ablation"],
+        "candidate": ["--compare-model", "p/base"],
+    }
     monkeypatch.setattr(
         sys, "argv",
         ["score_local.py", "--model", "p/entry", "--games", "1", "--hands", "3", "--seed", "13", "--lineup", "mixed",
-         "--talk-mode", "shuffled", "--out", str(tmp_path), flag],
+         "--talk-mode", "shuffled", "--out", str(tmp_path), *flags[arm]],
     )
     score_local.main()
 
     control = json.loads((tmp_path / "control" / "score-13.json").read_text())
     treatment = json.loads((tmp_path / arm / "score-13.json").read_text())
     assert control["lineup"] == treatment["lineup"] and control["scored_seat"] == treatment["scored_seat"]
-    assert len(systems) == 2
+    assert len(systems) == (1 if arm == "candidate" else 2)
+    assert models == ({"p/entry", "p/base"} if arm == "candidate" else {"p/entry"})
     if arm == "opponent_reads":
         assert all(PLACEMENT_GUIDANCE in system for system in systems)
         assert sum(ACTION_GUIDANCE in system and CLEANUP_GUIDANCE in system for system in systems) == 1
-    else:
+    elif arm == "table_talk_defense":
         assert sum(ACTION_DEFENSE in system and CLEANUP_DEFENSE in system for system in systems) == 1
+    elif arm == "balanced_play":
+        assert sum(BALANCED_PLAY in system for system in systems) == 1
     assert score_local.summarize(treatment)["cleanup_updated"] >= 1
     paired = json.loads(capsys.readouterr().out.splitlines()[-1])
     assert paired["paired_games"] == 1 and paired["mean_places_gained"] == 0 and paired["tied"] == 1

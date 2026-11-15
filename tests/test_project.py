@@ -215,6 +215,9 @@ def test_training_configs_send_only_explicit_settings() -> None:
     assert "offline" in text and '"num_train_steps": 20' in text
     assert "learning_rate" not in text and "max_response_len" not in text
     assert opsd["experiment_cfg"]["rollout"] == {"n_inference_replicas": 0}
+    settings = opsd_train.parser().parse_args(["--dataset", "d", "--rollout-mode", "one_step"])
+    one_step = opsd_train.run_config(settings, "n").to_json()["experiment_cfg"]
+    assert one_step["method"]["rollout_mode"] == "one_step" and one_step["rollout"] == {"n_inference_replicas": 1}
 
 
 def test_every_deployment_is_exactly_one_gpu(monkeypatch: pytest.MonkeyPatch) -> None:

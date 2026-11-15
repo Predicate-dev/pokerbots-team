@@ -1,8 +1,9 @@
-"""Offline OPSD: distill the hinted teacher into a student that never sees the hint.
+"""Distill the hinted teacher into a student that never sees the hint.
 
 Offline mode replays each stored reply from `build_dataset.py`: the student scores it on the plain harness prompt,
 the frozen teacher (the base model) on the same prompt plus the hint, and the loss is their reverse KL on the reply's
 tokens. No environment, grader or reward runs in training, and no inference engine is needed.
+One-step mode samples a new reply at each saved decision prompt. Both modes run without a poker environment.
 
 Every setting this script sends is a flag below. A flag left unset is not sent, so AC2 uses its own default for it
 (learning rate, response and context length, ...). Offline mode itself requires one sample per task, no inference
@@ -37,6 +38,7 @@ from ac2.sdk.run_config import (
     TrainerConfig,
 )
 
+from hint import ROLLOUT_MODES
 
 
 def _set(**values: Any) -> dict[str, Any]:
@@ -46,14 +48,15 @@ def _set(**values: Any) -> dict[str, Any]:
 
 def run_config(args: argparse.Namespace, name: str) -> RunConfig:
     launch = _set(tensorboard_enabled=args.tensorboard or None)  # AC2 places the run; teams can't pick a cluster
+    offline = args.rollout_mode == "offline"
     return RunConfig(
         model=args.model,
         name=name,
-        description=f"Offline OPSD of a prompted strategy hint into {args.model} (student without the hint), "
+        description=f"OPSD ({args.rollout_mode}) of a prompted strategy hint into {args.model}, "
         f"{args.dataset}.",
         tags={"benchmark": "pokerbots", "method": "opsd", "dataset": args.dataset},
         experiment_cfg=ExperimentConfig(
-            method=OPSDConfig(rollout_mode="offline"),
+            method=OPSDConfig(rollout_mode=args.rollout_mode),
             step=StepConfig(
                 samples_per_problem=1,  # required by offline mode: it replays one stored reply per task
                 **_set(
@@ -69,7 +72,7 @@ def run_config(args: argparse.Namespace, name: str) -> RunConfig:
             ),
             trainer=TrainerConfig(**_set(learning_rate=args.lr)),
             rollout=RolloutConfig(
-                n_inference_replicas=0,  # required by offline mode: nothing is sampled
+                n_inference_replicas=0 if offline else 1,
                 **_set(max_response_len=args.max_response_len, max_total_len=args.max_total_len),
             ),
             eval=EvalConfig(mode="off"),  # required here: the poker eval runs through the harness afterwards
@@ -82,6 +85,8 @@ def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--project", default="vals-hackathon")
     p.add_argument("--dataset", required=True, help="hinted dataset from build_dataset.py")
+    p.add_argument("--rollout-mode", choices=ROLLOUT_MODES, default="offline",
+                   help="match the dataset builder's mode")
     p.add_argument("--model", default="Qwen/Qwen3.6-35B-A3B", help="base model (arena entries are this model or fine-tunes of it)")
     p.add_argument("--dry-run", action="store_true", help="print the settings and configuration, submit nothing")
     g = p.add_argument_group("set by default (the OPSD recipe); change them with these flags")
@@ -111,8 +116,8 @@ def main() -> None:
             value = getattr(args, action.dest, None)
             if action.dest not in skip and value not in (None, False):
                 print(f"  {action.dest} = {value}")
-        print("  samples_per_problem = 1, n_inference_replicas = 0, eval = off (required by offline mode)")
-        print("GPUs while running: about 4 for Qwen3.6-35B-A3B (training only; offline OPSD samples nothing)")
+        replicas = 0 if args.rollout_mode == "offline" else 1
+        print(f"  samples_per_problem = 1, n_inference_replicas = {replicas}, eval = off")
         print(json.dumps(config.to_json(), indent=1, default=str))
         return
     run = Client(project=args.project).train.run(config)

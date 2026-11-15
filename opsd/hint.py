@@ -1,4 +1,4 @@
-"""The prompted strategy hint that OPSD distills into the weights.
+"""The original tight-survival OPSD strategy, kept for reproducing experiments.
 
 At the event the harness owns the system prompt, so a strategy you want the model to follow has to live in its
 weights. This hint is the "tight survival" strategy, written from the arena's first public replays (2026-11-14):
@@ -8,6 +8,8 @@ because the model only ever sees seat numbers.
 """
 
 SEPARATOR = "\n\n"
+ROLLOUT_MODES = ("offline", "one_step")
+STRATEGIES = ("balanced", "tight-survival")
 
 HINT = """Strategy notes for this game:
 - You are ranked by finishing place, not by chips won. Everyone who still has chips at the end ranks above everyone

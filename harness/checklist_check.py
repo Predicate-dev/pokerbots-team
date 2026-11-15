@@ -17,7 +17,7 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-BLOCK = (Path(__file__).resolve().parents[1] / "opsd" / "notes" / "call_checklist.txt").read_text().strip()
+NOTES = Path(__file__).resolve().parents[1] / "opsd" / "notes" / "call_checklist.txt"
 
 
 def play(model: str, hands: int, seed: int, out: Path) -> Path | None:
@@ -40,7 +40,9 @@ def main() -> None:
     parser.add_argument("--hands", type=int, default=10)
     parser.add_argument("--seed", type=int, default=4100)
     parser.add_argument("--out", type=Path, default=Path("runs/checklist_check"))
+    parser.add_argument("--notes-file", type=Path, default=NOTES, help="the text the notes must start with")
     args = parser.parse_args()
+    block = args.notes_file.read_text().strip()
     with ThreadPoolExecutor(args.games) as pool:
         logs = list(pool.map(lambda s: play(args.model, args.hands, s, args.out), range(args.seed, args.seed + args.games)))
     total = {"hands": 0, "exact": 0, "title": 0, "decisions": 0, "failed": 0}
@@ -51,13 +53,14 @@ def main() -> None:
         mine = [a for hand in log["hands"] for a in hand["actions"] if a["player"] == "seat0"]
         failed = sum(bool(a["model_response"].get("format_error")) for a in mine)
         hands = log["private"]["seat0"]["hands"]
-        first, exact, title, lengths = None, 0, 0, []
+        first, exact, title, typed, lengths = None, 0, 0, 0, []
         for number, record in sorted(hands.items(), key=lambda kv: int(kv[0])):
             after = record.get("scratchpad_after")
             if after is None:
                 continue
             lengths.append(len(after))
-            exact += after.startswith(BLOCK)
+            exact += after.startswith(block)
+            typed += "Seat types:" in after
             title += "CALL CHECKLIST" in after
             if first is None and "CALL CHECKLIST" in after:
                 first = int(number)
@@ -67,7 +70,7 @@ def main() -> None:
         total["decisions"] += len(mine)
         total["failed"] += failed
         print(f"{path.name}: checklist first written after hand {first} | word for word after {exact}/{len(lengths)} hands | "
-              f"present in some form {title}/{len(lengths)} | notes length {min(lengths, default=0)}-{max(lengths, default=0)} | "
+              f"present in some form {title}/{len(lengths)} | names seat types {typed}/{len(lengths)} | notes length {min(lengths, default=0)}-{max(lengths, default=0)} | "
               f"failed decisions {failed}/{len(mine)} | net {log['final_stacks']['seat0'] - 200:+d} chips")
     print(f"\n{args.model}: checklist word for word after {total['exact']}/{total['hands']} hands, present in some form "
           f"{total['title']}/{total['hands']}; failed decisions {total['failed']}/{total['decisions']}")

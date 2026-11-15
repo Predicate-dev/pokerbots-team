@@ -24,6 +24,7 @@ from pathlib import Path
 
 from clone_from_replays import replay_hand
 from puzzles import equity
+from replay_chips import stack_before
 
 SELECT_ONE_IN = 6  # the same held-out matches as rl/make_puzzle_dataset.py
 FORCED = ("fallback", "coerced", "format_error", "afk", "timed_out", "token_cap", "sat_out", "error", "scripted")
@@ -58,10 +59,8 @@ async def spots(path: Path, min_share: float) -> list[dict]:
                 if to_call <= 0:
                     continue
                 took = example["action"]["action"]
-                stack_before = example["stack_after"] + (to_call if took == "call" else 0)
-                if took in ("bet", "raise"):
-                    stack_before = max(stack_before, to_call)
-                share = to_call / max(1, stack_before)
+                stack = stack_before(hand["actions"][index])
+                share = to_call / max(1, stack)
                 if share < min_share and example["street"] != "river":
                     continue
                 folded_before = {a["seat"] for a in hand["actions"][:index] if a["action"] == "fold"}
@@ -70,10 +69,14 @@ async def spots(path: Path, min_share: float) -> list[dict]:
                 if not villains:
                     continue
                 seed = int(hashlib.sha1(f"{match['id']}:{hand['hand_number']}:{seat}:{index}".encode()).hexdigest(), 16) & 0xFFFF
+                raises = [a for a in hand["actions"][:index] if a["action"] in ("bet", "raise") and a["seat"] != seat]
+                bettor = entries[raises[-1]["seat"]] if raises else None  # who made the bet the seat is facing
                 out.append({
+                    "bettor": bettor["name"] if bettor else None, "bettor_kind": bettor["kind"] if bettor else None,
+                    "bettor_said": [a["say"] for a in hand["actions"][:index] if raises and a["seat"] == raises[-1]["seat"] and a.get("say")],
                     "id": f"{match['id']}:{hand['hand_number']}:{seat}:{index}", "held_out": held_out(match["id"]),
                     "entry": entry["name"], "street": example["street"], "hole": example["hole"], "board": example["board"],
-                    "to_call": to_call, "pot": pot, "stack": stack_before, "share": round(share, 3),
+                    "to_call": to_call, "pot": pot, "stack": stack, "share": round(share, 3),
                     "players_left": players_left, "in_hand": len(hole) - len(folded_before) - 1, "villains": len(villains),
                     "equity": round(equity(example["hole"], villains, example["board"], seed), 3),
                     "took": "fold" if took == "fold" else "continue", "messages": example["messages"],

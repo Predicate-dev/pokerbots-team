@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import json
 import random
+import re
 import sys
 from collections import Counter
 from pathlib import Path
@@ -42,8 +43,36 @@ from price_card import card  # noqa: E402
 from price_run import with_notes  # noqa: E402
 
 NOTES = Path(__file__).with_name("notes") / "call_checklist.txt"
-KEEP = ("The CALL CHECKLIST block stays at the top of my notes, word for word. Below it I write my notes for this hand.")
+KEEP = "The CALL CHECKLIST block stays at the top of my notes, word for word. Below it I write my notes for this hand."
+KEEP_BOTH = ("The CALL CHECKLIST and OPPONENT GUIDE blocks stay at the top of my notes, word for word. Below them I name "
+             "each seat's type from its talk and play, then write my notes for this hand.")
 LIMIT = 5_000
+# a call decision is a training target only if its reply works from the checklist, not merely agrees with it
+USES_NOTES = re.compile(r"checklist|place margin|win ?%|\bneed\b|opponent guide|my notes", re.IGNORECASE)
+_SAID = re.compile(r'\(seat (\d+)\)[^\n]*? says: "([^"\n]*)"')
+_HERO = re.compile(r"Your seat: (\d+)")
+TYPES = (  # the guide's types, by the lines that give them away
+    ("NEVER FOLDS", ("i call, show me", "show me", "you are bluffing", "not buying it")),
+    ("SCARED", ("oh no", "please do not raise me")),
+    ("ALL-IN OR FOLD", ("all in, baby", "all in baby")),
+    ("TALKER", ("flopped the nuts", "ugh,", "ugh ")),
+    ("PROFESSOR", ("range", "discipline", "this holding", "implied odds")),
+)
+
+
+def seat_types(prompt: list[dict]) -> str:
+    """"Seat types: seat 2 = SCARED; ..." from the talk shown in this hand, or "" when no line gives a type away."""
+    text = "\n".join(str(m.get("content")) for m in prompt[2:] if m.get("role") == "user")
+    hero = _HERO.search(text)
+    found: dict[int, str] = {}
+    for seat, line in _SAID.findall(text):
+        if hero and seat == hero[1]:
+            continue
+        for name, phrases in TYPES:
+            if any(phrase in line.lower() for phrase in phrases):
+                found.setdefault(int(seat), name)
+                break
+    return "Seat types: " + "; ".join(f"seat {seat} = {name}" for seat, name in sorted(found.items())) if found else ""
 
 
 def parts(row: dict) -> tuple[list[dict], list[dict], dict, dict] | None:
@@ -79,14 +108,17 @@ def notes_task(row: dict, block: str, show_block: bool, max_tokens: int) -> Task
     empty = "(empty)" in prompt[1]["content"]
     if show_block and not empty:
         prompt[1] = prompt[1] | {"content": with_notes(prompt[1]["content"], block)}
-    new = f"{block}\n\n{contents.strip()}"[:LIMIT]
+    guide = "OPPONENT GUIDE" in block
+    types = seat_types(prompt) if guide else ""
+    new = f"{block}\n\n{types + chr(10) if types else ''}{contents.strip()}"[:LIMIT]
     call["arguments"] = json.dumps({"contents": new})
+    keep = KEEP_BOTH if guide else KEEP
     for item in reply:
         if item.get("type") == "reasoning" and isinstance(item.get("content"), str):
-            item["content"] = f"{KEEP}\n\n{item['content']}"
+            item["content"] = f"{keep}\n\n{item['content']}"
             break
     else:
-        reply.insert(0, {"type": "reasoning", "content": KEEP})
+        reply.insert(0, {"type": "reasoning", "content": keep})
     kind = "first" if empty else "keep" if show_block else "restore"
     return close(prompt, reply, call, "Scratchpad updated.", f"checklist:notes:{kind}")
 
@@ -112,6 +144,8 @@ def decision_task(row: dict, block: str, held_out: set, max_tokens: int, need_bl
         if c["plan"] != "close" and answer != c["plan"]:
             return None, "against the card"
         kind = f"call:{answer}" if c["plan"] != "close" else "other"
+        if need_block and kind != "other" and not USES_NOTES.search(json.dumps(reply)):
+            return None, "does not work from the notes"
     if not has_block and "(empty)" not in prompt[1]["content"]:  # every later hand has the block in its notes
         prompt[1] = prompt[1] | {"content": with_notes(prompt[1]["content"], block)}
     if action == "fold":
@@ -134,13 +168,14 @@ def main() -> None:
     parser.add_argument("--notes-since", required=True, help="notes spans from this ISO time on (UTC)")
     parser.add_argument("--spots", type=Path, required=True, help="harness/runs/price_spots.jsonl, to leave out held-out matches")
     parser.add_argument("--dataset", required=True)
+    parser.add_argument("--notes-file", type=Path, default=NOTES, help="the text to keep at the top of the scratchpad")
     parser.add_argument("--notes-turns", type=int, default=1_200)
     parser.add_argument("--restore-share", type=float, default=0.45, help="share of later notes turns shown without the block")
     parser.add_argument("--other-decisions", type=int, default=500)
     parser.add_argument("--max-tokens", type=int, default=2_500, help="drop longer replies")
     parser.add_argument("--upload", action="store_true")
     args = parser.parse_args()
-    block = NOTES.read_text().strip()
+    block = args.notes_file.read_text().strip()
     held_out = set()
     for line in args.spots.read_text().splitlines():
         spot = json.loads(line)

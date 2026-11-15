@@ -4,18 +4,27 @@ import itertools
 
 import pytest
 
-from poker_harness.placement import place_value
+from poker_harness.placement import place_value, rating_points, rating_weights
 
 EVEN = {f"seat{i}": 200 for i in range(6)}
 NOISE = 24.0  # chips per hand (12 BB at the 1/2 game)
+EVEN_VALUE = sum(rating_weights(6)) / 6
 
 
 def value(stacks: dict[str, int], hands_left: int, before: dict[str, int] | None = None) -> float:
     return place_value(stacks, "seat0", hands_left, NOISE, before)
 
 
-def test_even_stacks_are_worth_half_at_any_point() -> None:
-    assert value(EVEN, 29) == value(EVEN, 0) == 0.5
+def test_equal_rated_points_and_large_penalty_for_finishing_last() -> None:
+    points = [rating_points(place) for place in range(1, 7)]
+    assert points == pytest.approx([0.83, 0.63, 0.38, 0.05, -0.45, -1.45], abs=0.004)
+    weights = rating_weights(6)
+    assert weights[4] - weights[5] == pytest.approx(5 * (weights[0] - weights[1]))
+
+
+def test_even_stacks_have_a_uniform_chance_at_each_place_until_the_end() -> None:
+    assert value(EVEN, 29) == EVEN_VALUE
+    assert value(EVEN, 0) == 1.0  # finished ties share a place
 
 
 def test_with_no_hands_left_it_is_the_exact_ranking_and_margin_does_not_matter() -> None:
@@ -23,12 +32,12 @@ def test_with_no_hands_left_it_is_the_exact_ranking_and_margin_does_not_matter()
     by_a_lot = EVEN | {"seat0": 600}
     assert value(by_one, 0) == value(by_a_lot, 0) == 1.0
     assert value(EVEN | {"seat0": 199}, 0) == 0.0
-    assert value({"seat0": 250, "seat1": 300, "seat2": 250, "seat3": 100}, 0) == pytest.approx((0 + 0.5 + 1) / 3)
+    assert value({"seat0": 250, "seat1": 300, "seat2": 250, "seat3": 100}, 0) == rating_weights(4)[1]
 
 
 def test_the_same_lead_is_worth_more_with_fewer_hands_left() -> None:
     ahead = EVEN | {"seat0": 240, "seat1": 160}
-    assert 0.5 < value(ahead, 29) < value(ahead, 5) < value(ahead, 1) < value(ahead, 0) == 1.0
+    assert EVEN_VALUE < value(ahead, 29) < value(ahead, 5) < value(ahead, 1) < value(ahead, 0) == 1.0
 
 
 def test_more_chips_are_never_worse_but_each_extra_chip_is_worth_less_when_ahead() -> None:
@@ -58,10 +67,10 @@ def test_seats_that_are_both_out_rank_by_when_and_with_what_they_busted() -> Non
     before = {"seat0": 80, "seat1": 50, "seat2": 0, "seat3": 300}
     after = {"seat0": 0, "seat1": 0, "seat2": 0, "seat3": 430}
     # Above seat1 (busted the same hand with less) and seat2 (already out), below seat3.
-    assert value(after, 5, before) == pytest.approx(2 / 3)
-    assert place_value(after, "seat1", 5, NOISE, before) == pytest.approx(1 / 3)
+    assert value(after, 5, before) == rating_weights(4)[1]
+    assert place_value(after, "seat1", 5, NOISE, before) == rating_weights(4)[2]
     assert place_value(after, "seat2", 5, NOISE, before) == 0.0
-    assert value(after, 5) == pytest.approx(1 / 3)  # without `before`, seats that are out tie
+    assert value(after, 5) == rating_weights(4)[1]  # without `before`, seats that are out tie
 
 
 def test_it_needs_the_hero_and_someone_else() -> None:

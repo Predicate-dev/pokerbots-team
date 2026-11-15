@@ -3,6 +3,7 @@
     uv run python cut_snapshots.py                                  # every game in runs/, to runs/snapshots.jsonl
     uv run python cut_snapshots.py runs/game_*.json --policy seat0  # only your seat's hands
     uv run python cut_snapshots.py --min-hand 20                    # only the last third of each game
+    uv run python cut_snapshots.py arena_data/*.json --arena-entry org_3814ae0e9e26 --min-hand 15
 
 Each line of the output is one hand of one game, set up exactly as the game had it: the stacks, the button, the
 game's seed (so the same cards are dealt) and the seat ledger a perfect note-taker would have had by then
@@ -18,11 +19,13 @@ how seats really play if the opponents you train against are the models that pla
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from clone_from_replays import RULES, play_replay_hand, replay_players
 from poker_harness.snapshots import snapshots
 
 
@@ -50,18 +53,66 @@ def cut(
     return out, stats
 
 
+async def cut_arena(
+    paths: list[Path], entry: str, min_hand: int, min_log_hands: int,
+) -> tuple[list[dict[str, Any]], Counter]:
+    """Cut hands for an entry from public ranked replays verified against the local engine."""
+    out: list[dict[str, Any]] = []
+    stats: Counter = Counter()
+    seen = set()
+    names = [f"seat{i}" for i in range(RULES.seats)]
+    for path in sorted(paths):
+        stats["logs"] += 1
+        try:
+            match = json.loads(path.read_text())
+            if not isinstance(match, dict) or match.get("schema") != "vals-arena.match/1" or match["kind"] != "ranked":
+                continue
+            seat = next((s["seat"] for s in match["seats"] if s["entry"]["id"] == entry), None)
+            if seat is None or match["id"] in seen or len(match["hands"]) < min_log_hands:
+                continue
+            if match["format"]["total_hands"] != RULES.total_hands or len(match["seats"]) != RULES.seats:
+                stats["skipped: format"] += 1
+                continue
+            seen.add(match["id"])
+            hands = []
+            for hand in match["hands"]:
+                played, problem = await play_replay_hand(match, hand, replay_players(hand))
+                if problem:
+                    stats[f"skipped: {problem}"] += 1
+                    break
+                hands.append(played)
+            else:
+                log = {
+                    "game_id": match["id"],
+                    "session_info": {"player_names": names, "seed": int(match["seed"])},
+                    "hands": hands,
+                }
+                out.extend(snapshots(log, RULES.total_hands, [names[seat]], min_hand))
+                stats["games"] += 1
+        except (ValueError, KeyError, TypeError) as exc:
+            stats[f"skipped: {type(exc).__name__}"] += 1
+    stats["snapshots"] = len(out)
+    return out, stats
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("logs", nargs="*", type=Path, help="game logs (default: every .json in runs/)")
     parser.add_argument("--out", type=Path, default=Path("runs/snapshots.jsonl"))
     parser.add_argument("--policy", action="append", help="only this seat's hands, e.g. seat0 (repeatable)")
+    parser.add_argument("--arena-entry", help="read public ranked replays and select the seat with this entry ID")
     parser.add_argument("--min-hand", type=int, default=1, help="skip hands before this one")
     parser.add_argument("--game-hands", type=int, default=30, help="the length the games were meant to run")
     parser.add_argument("--min-log-hands", type=int, default=5, help="skip logs with fewer hands than this")
     args = parser.parse_args(argv)
 
-    paths = args.logs or sorted(Path("runs").glob("*.json"))
-    spots, stats = cut(paths, args.game_hands, args.policy, args.min_hand, args.min_log_hands)
+    if args.arena_entry:
+        if not args.logs or args.policy:
+            parser.error("--arena-entry takes public replay paths and selects the policy seat for each match")
+        spots, stats = asyncio.run(cut_arena(args.logs, args.arena_entry, args.min_hand, args.min_log_hands))
+    else:
+        paths = args.logs or sorted(Path("runs").glob("*.json"))
+        spots, stats = cut(paths, args.game_hands, args.policy, args.min_hand, args.min_log_hands)
     print(json.dumps(dict(stats)))
     if not spots:
         print("no snapshots: play some full games first (play_local.py writes them to runs/)")

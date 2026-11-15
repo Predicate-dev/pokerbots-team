@@ -122,6 +122,26 @@ uv run python rl/train.py --prefix pokerbots-real --dry-run
   before relying on `-select`. With fewer, `-select` may come out empty: train with `--no-eval`.
 - Opponents' scratchpads start blank in the replayed hand, whatever they had in the game.
 
+### Placement pilot from the arena checkpoint
+
+Public replay snapshots verify the deal, actions, board, and stacks against the local engine. The reward uses the
+same equal-rated Plackett-Luce weights as the local scorer, so the difference between fifth and sixth is five
+times the gap between first and second. Short tasks score expected rating value over the remaining hands and
+can also grade the ledger update.
+
+```bash
+python3 arena_tools/fetch_replays.py arena_data
+(cd harness && uv run python cut_snapshots.py ../arena_data/*.json --arena-entry org_3814ae0e9e26 \
+  --min-hand 15 --out runs/rating-snapshots.jsonl)
+uv run python rl/make_dataset.py --snapshots harness/runs/rating-snapshots.jsonl --ledger \
+  --opponent-model vals-hackathon/entry --prefix pokerbots-real-rating --dry-run
+uv run python rl/train.py --prefix pokerbots-real-rating --from-checkpoint ckpt_a118fbb9ac36 \
+  --steps 6 --checkpoint-every 2 --eval-every 2 --dry-run
+```
+
+This configuration keeps the in-run eval and uses about eight GPUs when launched. The existing harness host
+needs this grader code before a run using the new reward.
+
 ## Run
 
 With the harness and connector running and the datasets uploaded:

@@ -37,7 +37,8 @@ def snapshots(
     out = []
     for hand in log["hands"]:
         number, dealt = hand["hand_number"], hand["starting_state"]
-        stacks = [dealt.get(name, {}).get("starting_stack", 0) for name in names]
+        before = hand.get("stacks_before") or {}
+        stacks = [before.get(name, dealt[name]["starting_stack"]) if name in dealt else 0 for name in names]
         for name, ledger in ledgers.items():
             if name not in dealt:
                 continue

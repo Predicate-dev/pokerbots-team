@@ -175,12 +175,16 @@ def hand_ev(
             shares.append(_share(holes, known_board, hero))
     share = statistics.fmean(shares)
     ev = (share * pot - contrib[hero]) / big_blind
+    outcomes = {}
+    if allin_before_river and len(live) == 2:
+        outcomes["heads_up_outcomes"] = [shares.count(value) / len(shares) for value in (1.0, 0.5, 0.0)]
     return out | {
         "ev_bb": round(ev, 3),
         "method": "allin" if allin_before_river else "showdown",
         "ev_share": round(share, 4),
         "pot_bb": pot / big_blind,
         "redraw_fallbacks": fallbacks,
+        **outcomes,
     }
 
 
@@ -190,9 +194,10 @@ def label_ev(
     """Add `ev` = {seat: hand_ev(...)} to every hand for the seats in `seats`, in place; returns the log so a process
     pool can run it."""
     big_blind = log["session_info"]["big_blind"]
+    seed = str(log["session_info"].get("seed", log.get("game_id", "")))
     for hand in log["hands"]:
         hand["ev"] = {
-            seat: hand_ev(hand, seat, big_blind, variants, runouts, seed=log["game_id"], redraw=redraw)
+            seat: hand_ev(hand, seat, big_blind, variants, runouts, seed=seed, redraw=redraw)
             for seat in seats
             if seat in hand["starting_state"]
         }

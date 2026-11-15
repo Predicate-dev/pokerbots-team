@@ -56,11 +56,42 @@ def target_arguments(logged: dict) -> dict:
     return {"action": kind, "amount": logged["amount"]} if kind in ("bet", "raise") else {"action": kind}
 
 
+def replay_players(hand: dict) -> list[ReplaySeat]:
+    by_seat = {seat: [] for seat in range(RULES.seats)}
+    for action in hand["actions"]:
+        by_seat[action["seat"]].append(action)
+    return [ReplaySeat(f"seat{seat}", moves) for seat, moves in by_seat.items()]
+
+
+async def play_replay_hand(match: dict, hand: dict, players: list) -> tuple[dict, str]:
+    """Run one public hand and verify the deal, action sequence, board and stacks."""
+    stacks = dict.fromkeys(range(RULES.seats), 0) | {p["seat"]: p["starting_stack"] for p in hand["players"]}
+    log = await play_session(
+        f"clone-{match['id']}", int(match["seed"]), players, RULES,
+        initial_stacks=stacks, first_hand=hand["hand_number"], last_hand=hand["hand_number"],
+        button_seat=hand["button_seat"],
+    )
+    played = log["hands"][0]
+    dealt = {state["seat"]: state["hole_cards"] for state in played["starting_state"].values()}
+    if dealt != {p["seat"]: p["hole_cards"] for p in hand["players"]}:
+        return {}, "cards differ"
+    ours = [(a["seat"], a["action"]["type"], a["action"].get("amount")) for a in played["actions"]]
+    theirs = [(a["seat"], a["action"], a["amount"] if a["action"] in ("bet", "raise") else None) for a in hand["actions"]]
+    if ours != theirs:
+        return {}, "actions differ"
+    if list(played.get("final_board") or []) != list(hand["board"]):
+        return {}, "board differs"
+    recorded_stacks = dict.fromkeys(played["ending_stacks"], 0)
+    recorded_stacks.update({f"seat{seat}": stack for seat, stack in hand["stacks_after"].items()})
+    if played["ending_stacks"] != recorded_stacks:
+        return {}, "stacks differ"
+    return played, ""
+
+
 async def replay_hand(match: dict, hand: dict, seat: int) -> tuple[list[dict], str]:
     """The (messages, action) examples for `seat` in one hand, and "" or why the hand was dropped."""
-    seats = RULES.seats
-    by_seat = {s: [a for a in hand["actions"] if a["seat"] == s] for s in range(seats)}
-    mine = by_seat[seat]
+    players: list = replay_players(hand)
+    mine = players[seat].queue
     if not mine:
         return [], "no decision"
     examples: list[dict] = []
@@ -78,31 +109,15 @@ async def replay_hand(match: dict, hand: dict, seat: int) -> tuple[list[dict], s
     async def no_cleanup(messages: list) -> Completion:
         return Completion(text="")
 
-    players: list = []
-    for s in range(seats):
-        if s == seat:
-            players.append(ModelSeat(f"seat{s}", recorder, RULES, model="replay/target", cleanup_complete=no_cleanup))
-        else:
-            players.append(ReplaySeat(f"seat{s}", by_seat[s]))
-    stacks = dict.fromkeys(range(seats), 0) | {p["seat"]: p["starting_stack"] for p in hand["players"]}
-    log = await play_session(
-        f"clone-{match['id']}", int(match["seed"]), players, RULES,
-        initial_stacks=stacks, first_hand=hand["hand_number"], last_hand=hand["hand_number"],
-        button_seat=hand["button_seat"],
-    )
-    played = log["hands"][0]
-    dealt = {int(name.removeprefix("seat")): state["hole_cards"] for name, state in played["starting_state"].items()}
-    if dealt != {p["seat"]: p["hole_cards"] for p in hand["players"]}:
-        return [], "cards differ"
-    ours = [(int(a["player"].removeprefix("seat")), a["action"]["type"], a["action"].get("amount")) for a in played["actions"]]
-    theirs = [(a["seat"], a["action"], a["amount"] if a["action"] in ("bet", "raise") else None) for a in hand["actions"]]
-    if [(s, k, v if k in ("bet", "raise") else None) for s, k, v in ours] != theirs:
-        return [], "actions differ"
-    if list(played.get("final_board") or []) != list(hand["board"]):
-        return [], "board differs"
-    kept = [e for e in examples if not (e["logged"].get("fallback") or e["logged"].get("format_error") or e["logged"].get("afk"))]
+    name = f"seat{seat}"
+    players[seat] = ModelSeat(name, recorder, RULES, model="replay/target", cleanup_complete=no_cleanup)
+    played, problem = await play_replay_hand(match, hand, players)
+    if problem:
+        return [], problem
+    invalid = ("fallback", "format_error", "afk", "timed_out", "token_cap", "coerced", "sat_out", "error")
+    kept = [e for e in examples if not any(e["logged"].get(flag) for flag in invalid)]
     for e in kept:
-        e.update(match=match["id"], kind=match["kind"], hand=hand["hand_number"], hole=dealt[seat],
+        e.update(match=match["id"], kind=match["kind"], hand=hand["hand_number"], hole=played["starting_state"][name]["hole_cards"],
                  street=e["logged"]["street"])
         del e["logged"]
     return kept, ""

@@ -27,11 +27,12 @@ from poker_harness.engine.scripted import ARCHETYPES, ScriptedPlayer
 from poker_harness.game import play_session
 from poker_harness.house_bots import HOUSE_STYLES, TALK_MODES, HouseStylePlayer
 from poker_harness.opponent_reads import ACTION_GUIDANCE, CLEANUP_GUIDANCE, PLACEMENT_GUIDANCE
+from poker_harness.placement import rating_points
 from poker_harness.preflop import PreflopAction, opportunities, record_folds
 from poker_harness.preflop_reference import reference_hint
 from poker_harness.prompts import talk_fields
 from poker_harness.seat import Complete, Completion, Message, ModelSeat
-from poker_harness.talk_defense import ACTION_DEFENSE, CLEANUP_DEFENSE
+from poker_harness.talk_defense import ACTION_DEFENSE, CLEANUP_DEFENSE, SPECIFIC_CLAIMS
 
 
 def with_preflop_reference(complete: Complete) -> Complete:
@@ -147,6 +148,7 @@ def summarize(log: dict) -> dict:
         "seed": log["session_info"]["seed"],
         "seat": seat,
         "place": log["ranking"]["places"][seat],
+        "rating_points": rating_points(log["ranking"]["places"][seat], len(log["ranking"]["places"])),
         "chips": log["final_stacks"][seat],
         "busted_on": log["eliminated_on_hand"].get(seat),
         "hands": len(log["hands"]),
@@ -176,6 +178,8 @@ async def run(args: argparse.Namespace) -> list[dict]:
         }
     elif args.table_talk_defense_ablation:
         arms = {"control": "", "table_talk_defense": f"{ACTION_DEFENSE}\n\n{CLEANUP_DEFENSE}"}
+        if args.talk_mode == "false-claims":
+            arms["specific_claims"] = SPECIFIC_CLAIMS
     elif args.balanced_play_ablation:
         arms = {"control": "", "balanced_play": BALANCED_PLAY}
     elif args.compare_model:
@@ -203,34 +207,28 @@ async def run(args: argparse.Namespace) -> list[dict]:
         return list(await asyncio.gather(*(guarded(seed, arm, hint) for seed in seeds for arm, hint in arms.items())))
 
 
-def compare_arms(rows: list[dict], treatment_arm: str = "opponent_reads") -> dict:
-    control = {row["seed"]: row for row in rows if row["arm"] == "control"}
+def compare_arms(rows: list[dict], treatment_arm: str = "opponent_reads", *, control_arm: str = "control") -> dict:
+    control = {row["seed"]: row for row in rows if row["arm"] == control_arm}
     treatment = {row["seed"]: row for row in rows if row["arm"] == treatment_arm}
     shared = sorted(control.keys() & treatment.keys())
     changes = [control[seed]["place"] - treatment[seed]["place"] for seed in shared]
+    points = [treatment[seed]["rating_points"] - control[seed]["rating_points"] for seed in shared]
     return {
         "paired_games": len(changes),
         "unpaired_games": len(control.keys() ^ treatment.keys()),
         "mean_places_gained": round(statistics.fmean(changes), 3) if changes else None,
+        "rating_points_gained_per_game": round(statistics.fmean(points), 3) if points else None,
         "improved": sum(change > 0 for change in changes),
         "tied": sum(change == 0 for change in changes),
         "worsened": sum(change < 0 for change in changes),
     }
 
 
-def rating_points(place: int, seats: int = 6) -> float:
-    """The direction and relative size of the arena rating's change for one finish at a table of equally rated
-    seats. The arena rates with OpenSkill's Plackett-Luce model, whose update for the seat finishing in place r is
-    proportional to 1 - sum(1 / (seats + 1 - q) for q in 1..r): at six seats +0.83, +0.63, +0.38, +0.05, -0.45,
-    -1.45. Last place costs far more than first place earns, so this, not mean place, is what to compare on."""
-    return 1 - sum(1 / (seats + 1 - q) for q in range(1, place + 1))
-
-
 def print_summary(label: str, rows: list[dict]) -> None:
     n = len(rows)
     decisions = sum(r["decisions"] for r in rows)
     print(
-        f"\n{label}: {n} games | rating points per game {sum(rating_points(r['place']) for r in rows) / n:+.3f} | "
+        f"\n{label}: {n} games | rating points per game {statistics.fmean(r['rating_points'] for r in rows):+.3f} | "
         f"mean place {sum(r['place'] for r in rows) / n:.2f} of 6 | "
         f"busted {sum(r['busted_on'] is not None for r in rows)}/{n} | places {sorted(r['place'] for r in rows)} | "
         f"mean chips {sum(r['chips'] for r in rows) / n:.0f} | failed decisions {sum(r['failed'] for r in rows)}/{decisions} | "
@@ -279,6 +277,9 @@ def main() -> None:
         print(json.dumps(compare_arms(rows)))
     elif args.table_talk_defense_ablation:
         print(json.dumps(compare_arms(rows, "table_talk_defense")))
+        if args.talk_mode == "false-claims":
+            paired = compare_arms(rows, "table_talk_defense", control_arm="specific_claims")
+            print(json.dumps({"comparison": "ignore_vs_specific_claims", **paired}))
     elif args.balanced_play_ablation:
         print(json.dumps(compare_arms(rows, "balanced_play")))
     elif args.compare_model:

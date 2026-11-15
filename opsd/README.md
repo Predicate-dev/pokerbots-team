@@ -57,21 +57,22 @@ change to better play.
 
 ## Run
 
-1. **Play base on the train deals** through the harness, served as an inference deployment:
+1. **Play base on train deals with the official event prompt.** For example, use a window of a 30-hand
+   game from a house dataset built by `rl/make_training_datasets.py`:
    ```bash
-   uv run python -m vals_tools.eval --dataset pokerbots-train --deployment <project>/<base-deployment>
+   uv run python -m vals_tools.eval --dataset pokerbots-reads-v1-house-train --deployment <project>/<base-deployment>
    ```
 2. **Build the hinted dataset** from that eval's traces ([`build_dataset.py`](build_dataset.py)):
    ```bash
    uv run python opsd/build_dataset.py --eval <eval-id> --dataset pokerbots-opsd-train --dry-run
    uv run python opsd/build_dataset.py --eval <eval-id> --dataset pokerbots-opsd-train
    ```
-3. **Train** ([`train.py`](train.py)): 20 steps of 64 decisions, a checkpoint every 10. The learning rate and
+3. **Train** ([`train.py`](train.py)): use early checkpoints to compare the effect of distillation. The learning rate and
    lengths are AC2's defaults unless you pass `--lr`, `--max-response-len` or `--max-total-len`; `--dry-run` lists
    every setting the launch sends.
    ```bash
-   uv run python opsd/train.py --dataset pokerbots-opsd-train --dry-run
-   uv run python opsd/train.py --dataset pokerbots-opsd-train
+   uv run python opsd/train.py --dataset pokerbots-opsd-train --checkpoint-every 2 --dry-run
+   uv run python opsd/train.py --dataset pokerbots-opsd-train --checkpoint-every 2
    ```
 4. **Evaluate the student without the hint:** serve a checkpoint and run it through the harness on
    `pokerbots-eval`. The harness never shows the hint, so this measures what the weights learned.
@@ -154,15 +155,15 @@ uv run python opsd/build_from_gateway.py --deployment-id <infer_...> --dataset p
 
 ## Table talk defense
 
-Use the paired test to compare the official prompt with the same prompt plus guidance to ignore other players'
-chatter. Both arms see the same scripted lineup and types of chatter. Try fresh seeds and a mixed lineup with
-shuffled chatter before using the result to choose a training run. Also check a quiet lineup for loss of placement
-or reliability.
+Use the paired test to compare the official prompt, guidance to ignore chatter, and guidance that gives specific
+claims some weight. With `--talk-mode false-claims`, the scripted house seats sometimes name a pocket pair they
+do not hold when they raise preflop. The arms share seeds and lineups. The scorer reports the paired difference
+between ignoring chatter and using specific claims, in rating points per game.
 
 ```bash
 # From harness/
 uv run python score_local.py --model vals-hackathon/entry --table-talk-defense-ablation \
-  --talk-mode shuffled --lineup mixed --seed 960510 --out runs/talk-defense
+  --talk-mode false-claims --lineup house --seed 960510 --out runs/talk-defense
 ```
 
 On a table you host locally, `play_local.py --ignore-table-talk` removes quoted opponent messages from the
@@ -179,5 +180,17 @@ Use base-model traces from training games. The action hint teaches the model to 
 The cleanup hint teaches it to keep player prose out of the scratchpad. Check `cleanup_kept` and review a sample
 of both turn types before uploading. Use `--opponent-reads` as well if the experiment calls for both forms of guidance.
 
-The gateway builder uses the same action filters as `build_dataset.py`. Use the training base deployment for
-offline mode, which replays its own response tokens. `--since <UTC time>` limits the source to recent requests.
+Both builders require the unmodified event system prompt. Preview and treatment requests with guidance appended
+are skipped. `--hint-file` replaces the teacher strategy and can be combined with `--opponent-reads` and
+`--table-talk-defense`. Use the training base deployment for offline mode, which replays its own response tokens.
+`--since <UTC time>` limits the gateway source to recent requests.
+
+To inspect the configuration for a one-step smoke run, use a separate dataset built with
+`--rollout-mode one_step` and run:
+
+```bash
+uv run python opsd/train.py --dataset pokerbots-balanced-one-step --rollout-mode one_step \
+  --steps 1 --batch 8 --checkpoint-every 1 --dry-run
+```
+
+The preview checks the local configuration. A scheduled smoke launch is needed to verify that the org accepts it.

@@ -40,11 +40,10 @@ in a game, where a leader should protect its lead and a trailing seat has to gam
 
     hand_reward = placement_scale * (place_value(after) - place_value(before))
 
-`place_value` (`placement.py`) is the share of the other seats the seat is expected to finish above, in [0, 1].
-`hands_left` (required) is how many hands the game still has after this task's hands. `placement_scale` (default
-10) maps a swing of half the table to the full +-5 band; `placement_noise_bb` (default 12) is how far the gap
-between two stacks drifts per hand. An all-in before the river between two seats counts both outcomes weighted by
-the all-in equity (when the task has EV labels), which removes the runout's luck without hiding the risk of busting;
+`place_value` (`placement.py`) is expected rating value, with the equal-rated Plackett-Luce weights scaled to [0, 1].
+`hands_left` is how many hands the game still has after this task's hands. `placement_scale` (default 5) scales
+changes in expected rating value; `placement_noise_bb` (default 12) is how far the gap between two stacks drifts per
+hand. When EV labels are available, a heads-up all-in before the river averages the rating value of each outcome;
 every other hand uses the stacks as they ended. Use it with mid-game tasks (`env_params.starting_stacks`,
 `first_hand`, `play_hands`); tasks without `reward` are scored on chips exactly as before.
 
@@ -103,13 +102,13 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from .game import placements
 from .ev import _contributions
+from .game import placements
 from .ledger import accuracy as ledger_accuracy
 from .ledger import parse as parse_ledger
 from .ledger import update as update_ledger
 from .persona import sizing_checks
-from .placement import DEFAULT_NOISE_BB, place_value
+from .placement import DEFAULT_NOISE_BB, place_value, rating_weights
 
 REWARD_OFFSET = 6.0  # shifts the clipped reward [-5, +5] to [1, 11]
 REWARD_FLOOR, REWARD_CEILING = -5.0, 5.0
@@ -125,7 +124,7 @@ NOTE_WEIGHTS = ("ledger_weight", "persona_weight")  # points of the 10-point ban
 GRADER_PARAMS: frozenset[str] = frozenset({"reward", "chip_weight", "ev_unit_bb", *NOTE_WEIGHTS}) | PLACEMENT_PARAMS
 REWARDS = ("ev", "chips", "placement")
 DEFAULT_CHIP_WEIGHT = 0.25
-PLACEMENT_SCALE = 10.0  # reward points per unit of place value: half the table = the whole +-5 band
+PLACEMENT_SCALE = 5.0  # a full rating-value swing fits within the score band without clipping other outcomes
 
 
 class GradingError(ValueError):
@@ -143,7 +142,7 @@ class SeatResult:
     format_errors: int
     folded: bool
     hands: int
-    place_before: float | None = None  # expected share of the table finished above; only with the placement reward
+    place_before: float | None = None  # expected normalized rating; only with the placement reward
     place_after: float | None = None
     ledger_accuracy: float | None = None  # share of the reference ledger the scratchpad got right; with ledger_weight
     persona: float | None = None  # right MODE line and sizes that fit the mode, in [0, 1]; with persona_weight
@@ -194,6 +193,8 @@ def check_grader_params(grader_params: dict[str, Any] | None) -> dict[str, Any]:
 
 def _stacks_before(hand: dict[str, Any], names: list[str]) -> dict[str, int]:
     """Every seat's stack before `hand` (0 for a seat that was already out and so not dealt in)."""
+    if "stacks_before" in hand:
+        return {name: hand["stacks_before"].get(name, 0) for name in names}
     return {name: hand["starting_state"].get(name, {}).get("starting_stack", 0) for name in names}
 
 
@@ -219,13 +220,19 @@ def place_values(log: dict[str, Any], seat: str, params: dict[str, Any]) -> tupl
     folded = {a["player"] for a in last["actions"] if a["action"]["type"] == "fold"}
     live = [name for name in last["starting_state"] if name not in folded]
     if len(hands) == 1 and label.get("method") == "allin" and len(live) == 2 and seat in live:
-        # Two seats all in before the river: weigh both outcomes by the all-in equity instead of the cards that came.
+        # A tie and a mix of wins and losses have different rank value.
         (other,) = (n for n in live if n != seat)
         contrib = _contributions(last)
         pot = sum(contrib.values())
         behind = {name: start[name] - contrib.get(name, 0) for name in names}
         wins = place_value(behind | {seat: behind[seat] + pot}, seat, left, noise, start)
         loses = place_value(behind | {other: behind[other] + pot}, seat, left, noise, start)
+        if "heads_up_outcomes" in label:
+            win, tie, loss = label["heads_up_outcomes"]
+            half, odd = divmod(pot, 2)
+            split = behind | {name: behind[name] + half + (odd if i == 0 else 0) for i, name in enumerate(live)}
+            ties = place_value(split, seat, left, noise, start)
+            return before, win * wins + tie * ties + loss * loses
         return before, label["ev_share"] * wins + (1.0 - label["ev_share"]) * loses
     if bust_hand is not None:
         return before, place_value(bust_hand["ending_stacks"], seat, left, noise, _stacks_before(bust_hand, names))
@@ -322,6 +329,7 @@ class Placement:
     final_chips: float
     chip_share: float  # of all chips in play
     busted: bool  # any policy seat ended with no chips
+    rating_value: float  # normalized rating value using every original seat, including prior eliminations
 
 
 def placement(log: dict[str, Any], policy_seats: list[str]) -> Placement:
@@ -333,6 +341,7 @@ def placement(log: dict[str, Any], policy_seats: list[str]) -> Placement:
     if total <= 0 or any(seat not in chips for seat in policy_seats):
         raise GradingError("the log has no final stacks for the policy seats")
     places = placements(log, "elimination")
+    weights = rating_weights(len(places))
     # Seats that started the log with no chips always rank last, so they aren't places the policy can reach: rank
     # among the seats in play at the start, so 0 means last of those whatever the table's size.
     info = log["session_info"]
@@ -345,14 +354,14 @@ def placement(log: dict[str, Any], policy_seats: list[str]) -> Placement:
         final_chips=mine,
         chip_share=mine / total,
         busted=any(chips[seat] == 0 for seat in policy_seats),
+        rating_value=sum(weights[places[seat] - 1] for seat in policy_seats) / count,
     )
 
 
 def placement_reward(result: Placement, params: dict[str, Any]) -> float:
     """The placement reward before the +1: 0 for last place with no chips, 10 for first place with every chip."""
     weight = float(params.get("chip_weight", DEFAULT_CHIP_WEIGHT))
-    rank_share = (result.seats - result.place) / (result.seats - 1) if result.seats > 1 else 1.0
-    return 10.0 * ((1.0 - weight) * rank_share + weight * result.chip_share)
+    return 10.0 * ((1.0 - weight) * result.rating_value + weight * result.chip_share)
 
 
 def failure_score(reason: str) -> dict[str, Any]:
@@ -424,6 +433,7 @@ def grade_placement(
             "final_chips": finish.final_chips,
             "chip_share": finish.chip_share,
             "busted": finish.busted,
+            "rating_value": finish.rating_value,
             "realized_bb": result.realized_bb,
             "policy_decisions": result.decisions,
             "policy_format_errors": result.format_errors,

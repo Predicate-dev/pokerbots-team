@@ -23,7 +23,7 @@ from .engine.table import Decision, DecisionContext
 from .spots import RANKS, chen_score
 
 HOUSE_STYLES = ("house_alice", "house_bob", "house_stan", "house_carlos", "house_pete", "house_tim")
-TALK_MODES = ("normal", "muted", "shuffled")
+TALK_MODES = ("normal", "muted", "shuffled", "false-claims")
 
 TALK = {
     "alice": {"fold": ["oh no, sorry, i fold", "please do not raise me"], "play": ["oh no, i have to play this"]},
@@ -129,6 +129,11 @@ class HouseStylePlayer:
         line = self.rng.randrange(len(lines)) if self.rng.random() < 0.6 else None
         voice_lines = TALK[self.voice][situation]
         say = "" if line is None or self.talk_mode == "muted" else voice_lines[line % len(voice_lines)]
+        if self.talk_mode == "false-claims":
+            say = ""
+            if line is not None and ctx.street == "preflop" and decision.type in ("bet", "raise"):
+                claim = "kings" if all(card[0] == "A" for card in ctx.hole_cards) else "aces"
+                say = f"raising with pocket {claim}."
         decision.model_response = {
             "model_name": self.name,
             "provider": "scripted",

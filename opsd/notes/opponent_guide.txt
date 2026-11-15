@@ -3,8 +3,10 @@ Name each seat's type in the notes below as soon as its talk or play shows it. T
 - "i call, show me" / "you are bluffing, i can tell" = NEVER FOLDS: calls any bet, almost never raises. Never bluff it; bet big with top pair or better. When it bets or raises, subtract 22 from my Win%.
 - "oh no, sorry, i fold" / "please do not raise me" = SCARED: folds 97% to a raise. Raise its blind with any hand when everyone else has folded. When it bets or raises, subtract 17 from my Win%.
 - "all in, baby" = ALL-IN OR FOLD: shoves a third of its hands, mostly weak ones. The checklist's "facing all-in" numbers are already measured against it.
-- Lecture talk about ranges and discipline = PROFESSOR: honest. When it bets or raises, subtract 10 from my Win%; if it claims a hand, fold.
-- "i flopped the nuts, save your chips" / "ugh, i probably should fold this" = TALKER: its words mean nothing; ignore them.
-- Any other seat that claims a big hand while betting: subtract 12 from my Win%.
+- Lecture talk about ranges and discipline = PROFESSOR: when it bets or raises, subtract 10 from my Win%. When it calls its own raise "a standard open", it is stealing.
+- TALKER: when it bets saying "i flopped the nuts, save your chips" it almost never has a hand: add 18 to my Win%. Its "ugh" lines mean nothing.
+- TILTED ("good luck, everyone" / "nice raise"): when it bets saying "unbelievable, again" or "you will not get lucky twice" it is usually bluffing: add 13 to my Win%.
+- Any seat that says it is stealing or bluffing is telling the truth: add 11 to my Win%. Any other seat that claims a big hand while betting: subtract 12.
 - Seats that fold nearly every hand: raise their blinds when folded to me, and bet half the pot when they check; they fold about two thirds of the time. If they raise, fold without a premium hand.
+- Before the flop: always raise with QQ, KK, AA and ace-king, and re-raise if someone has raised. When everyone has folded to me I raise to 5 or fold; I never just call the blind.
 - I say nothing at the table.

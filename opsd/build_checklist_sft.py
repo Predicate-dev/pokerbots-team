@@ -39,14 +39,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from build_dataset import ITEMS, SCRATCHPAD, SUBMIT, TOOLS, is_official_prompt  # noqa: E402
 from build_from_gateway import fetch_spans  # noqa: E402
 from build_price_dataset import spot_key  # noqa: E402
-from price_card import card  # noqa: E402
-from price_run import with_notes  # noqa: E402
+import open_card  # noqa: E402
+from price_card import POSTFLOP_NAMES, _strength, card, parse_state, postflop_class, preflop_class  # noqa: E402
+from price_run import PAD, with_notes  # noqa: E402
 
 NOTES = Path(__file__).with_name("notes") / "call_checklist.txt"
 KEEP = "The CALL CHECKLIST block stays at the top of my notes, word for word. Below it I write my notes for this hand."
 KEEP_BOTH = ("The CALL CHECKLIST and OPPONENT GUIDE blocks stay at the top of my notes, word for word. Below them I name "
              "each seat's type from its talk and play, then write my notes for this hand.")
 LIMIT = 5_000
+REPLACED = ""  # an earlier wording of the block that generated replies were shown (`--generated-with`)
+DROPPED_LINE_USE = re.compile(r"subtract 20|show me|oh no, sorry|never bets without", re.IGNORECASE)
 # a call decision is a training target only if its reply works from the checklist, not merely agrees with it
 USES_NOTES = re.compile(r"checklist|place margin|win ?%|\bneed\b|opponent guide|my notes", re.IGNORECASE)
 _SAID = re.compile(r'\(seat (\d+)\)[^\n]*? says: "([^"\n]*)"')
@@ -56,7 +59,8 @@ TYPES = (  # the guide's types, by the lines that give them away
     ("SCARED", ("oh no", "please do not raise me")),
     ("ALL-IN OR FOLD", ("all in, baby", "all in baby")),
     ("TALKER", ("flopped the nuts", "ugh,", "ugh ")),
-    ("PROFESSOR", ("range", "discipline", "this holding", "implied odds")),
+    ("PROFESSOR", ("range", "discipline", "this holding", "implied odds", "standard", "textbook")),
+    ("TILTED", ("good luck", "nice raise", "unbelievable", "lucky twice", "keep it friendly", "nice and easy")),
 )
 
 
@@ -73,6 +77,45 @@ def seat_types(prompt: list[dict]) -> str:
                 found.setdefault(int(seat), name)
                 break
     return "Seat types: " + "; ".join(f"seat {seat} = {name}" for seat, name in sorted(found.items())) if found else ""
+
+
+_OLD_BLOCKS = (
+    re.compile(r"CALL CHECKLIST.*?(?=\n\n|\Z)", re.DOTALL),  # a block has no blank line inside it
+    re.compile(r"OPPONENT GUIDE.*?(?=\n\n|\Z)", re.DOTALL),
+    re.compile(r"^Seat types:[^\n]*\n?", re.MULTILINE),
+)
+
+
+def strip_blocks(text: str) -> str:
+    """Notes without any earlier copy of the reference blocks or the seat-types line (they are written fresh)."""
+    for pattern in _OLD_BLOCKS:
+        text = pattern.sub("", text)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+def clean_pad(pad_message: str) -> str:
+    """The scratchpad message with earlier copies of the blocks removed from the scratchpad it shows."""
+    found = PAD.search(pad_message)
+    if not found or found[1].strip() == "(empty)":
+        return pad_message
+    body = strip_blocks(found[1]) or "(empty)"
+    size = 0 if body == "(empty)" else len(body)
+    return pad_message[: found.start()] + f"<<<SCRATCHPAD\n{body}\nSCRATCHPAD>>>\n{size}/{found[3]} characters" + pad_message[found.end():]
+
+
+def hand_name(hole: list[str], board: list[str]) -> str:
+    made = postflop_class(hole, board)
+    if made == "monster":
+        return {4: "a straight", 5: "a flush"}.get(_strength(hole + board), "a full house or better")
+    return POSTFLOP_NAMES[made]
+
+
+def lead_reasoning(reply: list[dict], line: str) -> None:
+    for item in reply:
+        if item.get("type") == "reasoning" and isinstance(item.get("content"), str):
+            item["content"] = f"{line}\n\n{item['content']}"
+            return
+    reply.insert(0, {"type": "reasoning", "content": line})
 
 
 def parts(row: dict) -> tuple[list[dict], list[dict], dict, dict] | None:
@@ -103,28 +146,28 @@ def notes_task(row: dict, block: str, show_block: bool, max_tokens: int) -> Task
     contents = arguments.get("contents")
     if call["name"] != SCRATCHPAD or not isinstance(contents, str) or int(row.get("tokens_out") or 0) >= max_tokens:
         return None
-    if block in contents or "CALL CHECKLIST" in contents:
-        return None
+    contents = strip_blocks(contents)  # a trace from a model that already kept a block: write the block fresh
     empty = "(empty)" in prompt[1]["content"]
+    prompt[1] = prompt[1] | {"content": clean_pad(prompt[1]["content"])}
     if show_block and not empty:
         prompt[1] = prompt[1] | {"content": with_notes(prompt[1]["content"], block)}
     guide = "OPPONENT GUIDE" in block
     types = seat_types(prompt) if guide else ""
-    new = f"{block}\n\n{types + chr(10) if types else ''}{contents.strip()}"[:LIMIT]
+    new = f"{block}\n\n{types + chr(10) if types else ''}{contents}"[:LIMIT]
     call["arguments"] = json.dumps({"contents": new})
-    keep = KEEP_BOTH if guide else KEEP
-    for item in reply:
+    for item in reply:  # a reasoning that already opens with the keep sentence gets it once
         if item.get("type") == "reasoning" and isinstance(item.get("content"), str):
-            item["content"] = f"{keep}\n\n{item['content']}"
-            break
-    else:
-        reply.insert(0, {"type": "reasoning", "content": keep})
+            item["content"] = item["content"].replace(KEEP_BOTH, "").replace(KEEP, "").strip()
+    lead_reasoning(reply, KEEP_BOTH if guide else KEEP)
     kind = "first" if empty else "keep" if show_block else "restore"
     return close(prompt, reply, call, "Scratchpad updated.", f"checklist:notes:{kind}")
 
 
 def decision_task(row: dict, block: str, held_out: set, max_tokens: int, need_block: bool) -> tuple[Task | None, str]:
-    """An ordinary or call decision with the checklist in the scratchpad it was shown; (task, kind or why dropped)."""
+    """A decision with the blocks in the scratchpad it was shown; (task, kind or why it was dropped).
+
+    Kinds: call:fold / call:continue (a clear price-card plan, followed), open:raise / open:fold (a clear open-card
+    plan, followed), premium (a raise with QQ+, AK, 99-JJ or AQ-AJ before the flop), other."""
     found = parts(row)
     if found is None:
         return None, "not clean"
@@ -132,9 +175,19 @@ def decision_task(row: dict, block: str, held_out: set, max_tokens: int, need_bl
     if call["name"] != SUBMIT or int(row.get("tokens_out") or 0) >= max_tokens:
         return None, "not a short action"
     action = arguments.get("action")
+    if need_block and REPLACED and REPLACED in prompt[1]["content"]:
+        # the reply was written with an earlier wording of the block: show the current one, and drop replies that
+        # lean on a line the current block no longer has
+        if DROPPED_LINE_USE.search(json.dumps(reply)):
+            return None, "leans on a removed line"
+        prompt[1] = prompt[1] | {"content": with_notes(clean_pad(prompt[1]["content"]), block)}
     has_block = block in prompt[1]["content"]
     if need_block and not has_block:
         return None, "no checklist in the notes"
+    state = parse_state(prompt)
+    if state is None:
+        return None, "unreadable state"
+    spot, rest = state
     c = card(prompt)
     kind = "other"
     if c is not None:
@@ -146,8 +199,38 @@ def decision_task(row: dict, block: str, held_out: set, max_tokens: int, need_bl
         kind = f"call:{answer}" if c["plan"] != "close" else "other"
         if need_block and kind != "other" and not USES_NOTES.search(json.dumps(reply)):
             return None, "does not work from the notes"
-    if not has_block and "(empty)" not in prompt[1]["content"]:  # every later hand has the block in its notes
-        prompt[1] = prompt[1] | {"content": with_notes(prompt[1]["content"], block)}
+        if not need_block and kind != "other":  # real play: only the first hand, where the notes are still empty
+            premium_raise = (spot["street"] == "preflop" and action == "raise"
+                             and preflop_class(spot["hole"]) in ("QQ+", "AK", "99-JJ", "AQ-AJ"))
+            if premium_raise:
+                kind = "other"  # becomes "premium" below
+            elif spot["hand"] == 1 and "(empty)" in prompt[1]["content"]:
+                kind = "first-hand call"
+            else:
+                return None, "a call decision from real play after the first hand"
+    if spot["street"] == "preflop":
+        hand = preflop_class(spot["hole"])
+        can_raise = "raise to" in rest
+        opening = open_card.card(prompt)
+        if opening is not None:  # everyone has folded to this seat
+            if action == "call":
+                return None, "limps"
+            if opening["clear"]:
+                if open_card.answer(opening, arguments) != opening["plan"]:
+                    return None, "against the open card"
+                kind = f"open:{opening['plan']}"
+        if hand in ("QQ+", "AK") and can_raise and action in ("fold", "call") and not (c and c["plan"] == "fold"):
+            return None, "does not raise a premium hand"
+        if hand in ("QQ+", "AK", "99-JJ", "AQ-AJ") and action == "raise" and kind == "other":
+            kind = "premium"
+    else:
+        made = postflop_class(spot["hole"], spot["board"])
+        if made in ("monster", "trips") and action == "fold":
+            return None, "folds a very strong hand"
+        lead_reasoning(reply, f"My hand: {hand_name(spot['hole'], spot['board'])}.")  # name the made hand before anything else
+    if not has_block:  # a trace from real play: show the notes as this model will have them
+        pad = clean_pad(prompt[1]["content"])
+        prompt[1] = prompt[1] | {"content": pad if "(empty)" in pad and spot["hand"] == 1 else with_notes(pad, block)}
     if action == "fold":
         move = "fold"
     elif action == "check":
@@ -162,20 +245,27 @@ def decision_task(row: dict, block: str, held_out: set, max_tokens: int, need_bl
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--project", default="vals-hackathon")
-    parser.add_argument("--policy-deployment-id", required=True, help="the model's deployment in real games, infer_...")
-    parser.add_argument("--since", required=True, help="policy spans from this ISO time on (UTC)")
+    parser.add_argument("--policy-deployment-id", required=True, nargs="+", help="the model's deployments in real games, infer_...")
+    parser.add_argument("--since", required=True, nargs="+", help="for each policy deployment: spans from this ISO time on (UTC)")
     parser.add_argument("--notes-deployment-id", required=True, help="the deployment asked with --notes-file")
     parser.add_argument("--notes-since", required=True, help="notes spans from this ISO time on (UTC)")
     parser.add_argument("--spots", type=Path, required=True, help="harness/runs/price_spots.jsonl, to leave out held-out matches")
     parser.add_argument("--dataset", required=True)
     parser.add_argument("--notes-file", type=Path, default=NOTES, help="the text to keep at the top of the scratchpad")
+    parser.add_argument("--generated-with", type=Path, help="an earlier wording of the notes that the generated replies were shown")
     parser.add_argument("--notes-turns", type=int, default=1_200)
     parser.add_argument("--restore-share", type=float, default=0.45, help="share of later notes turns shown without the block")
     parser.add_argument("--other-decisions", type=int, default=500)
+    parser.add_argument("--open-raises", type=int, default=300, help="first-in raises the open card agrees with")
+    parser.add_argument("--open-folds", type=int, default=200, help="first-in folds the open card agrees with")
+    parser.add_argument("--premium-raises", type=int, default=300, help="preflop raises with QQ+, AK, 99-JJ, AQ-AJ")
+    parser.add_argument("--first-hand-calls", type=int, default=300, help="hand-1 call decisions (empty notes) that follow the card")
     parser.add_argument("--max-tokens", type=int, default=2_500, help="drop longer replies")
     parser.add_argument("--upload", action="store_true")
     args = parser.parse_args()
     block = args.notes_file.read_text().strip()
+    global REPLACED  # noqa: PLW0603
+    REPLACED = args.generated_with.read_text().strip() if args.generated_with else ""
     held_out = set()
     for line in args.spots.read_text().splitlines():
         spot = json.loads(line)
@@ -185,19 +275,29 @@ def main() -> None:
     rng = random.Random(0)
     stats: Counter = Counter()
 
-    policy = fetch_spans(client, args.policy_deployment_id, args.project, args.since)
+    policy = []
+    for deployment, since in zip(args.policy_deployment_id, args.since, strict=True):
+        policy += fetch_spans(client, deployment, args.project, since)
     rng.shuffle(policy)
-    first, later, other = [], [], []
+    first, later = [], []
+    pools: dict[str, list[Task]] = {"other": [], "open:raise": [], "open:fold": [], "premium": [], "first-hand call": []}
     for row in policy:
         if '"update_scratchpad"' in (row.get("output") or ""):
             show = rng.random() >= args.restore_share
             task = notes_task(row, block, show, args.max_tokens)
             if task is not None:
                 (first if task.env_params["source"].endswith("first") else later).append(task)
-        elif len(other) < args.other_decisions:
+        else:
             task, kind = decision_task(row, block, held_out, args.max_tokens, need_block=False)
-            if task is not None and kind == "other":
-                other.append(task)
+            if task is None:
+                stats[f"ordinary decision dropped: {kind}"] += 1
+            elif kind in pools:
+                pools[kind].append(task)
+    caps = {"other": args.other_decisions, "open:raise": args.open_raises, "open:fold": args.open_folds, "premium": args.premium_raises,
+            "first-hand call": args.first_hand_calls}
+    other = [task for kind, tasks in pools.items() for task in tasks[: caps[kind]]]
+    for kind, tasks in pools.items():
+        stats[f"kept {kind}"] = min(len(tasks), caps[kind])
     notes_turns = first + later[: max(0, args.notes_turns - len(first))]
     for task in notes_turns:
         stats[task.env_params["source"]] += 1

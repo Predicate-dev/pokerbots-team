@@ -22,6 +22,7 @@ import asyncio
 import json
 import os
 import random
+import re
 import sys
 from pathlib import Path
 
@@ -34,6 +35,18 @@ from hint import SEPARATOR  # noqa: E402
 from poker_harness.completions import GATEWAY_URL, relay_completion, with_preset  # noqa: E402
 from poker_harness.prompts import talk_fields  # noqa: E402
 from price_card import card, hint  # noqa: E402
+
+
+PAD = re.compile(r"<<<SCRATCHPAD\n(.*)\nSCRATCHPAD>>>\n(\d+)/(\d+) characters", re.DOTALL)
+
+
+def with_notes(pad_message: str, notes: str) -> str:
+    """The scratchpad message with `notes` as the first block of the scratchpad (and the character count fixed)."""
+    found = PAD.search(pad_message)
+    if not found or notes in found[1]:
+        return pad_message
+    body = notes if found[1].strip() == "(empty)" else f"{notes}\n\n{found[1]}"[: int(found[3])]
+    return pad_message[: found.start()] + f"<<<SCRATCHPAD\n{body}\nSCRATCHPAD>>>\n{len(body)}/{found[3]} characters" + pad_message[found.end():]
 
 
 def gain(row: dict, c: dict, answer: str) -> float:
@@ -79,6 +92,7 @@ async def run(args: argparse.Namespace) -> None:
         rows = rows[: args.limit]
     params = with_preset({"preset": "event", "seed": 0, "submit_fields": ["action", "amount"]})
     params["submit_fields"] = talk_fields(params["submit_fields"])
+    notes = args.notes_file.read_text().strip() if args.notes_file else ""
     gate = asyncio.Semaphore(args.parallel)
     async with httpx.AsyncClient(timeout=httpx.Timeout(900.0, connect=30.0)) as client:
         complete = relay_completion(client, GATEWAY_URL, key, params | {"model_label": args.model})
@@ -87,6 +101,8 @@ async def run(args: argparse.Namespace) -> None:
             messages = [dict(m) for m in row["messages"]]
             if args.hint:
                 messages[0]["content"] = messages[0]["content"] + SEPARATOR + card_hint(row["card"])
+            if notes:  # the same decision with these notes already at the top of the seat's scratchpad
+                messages[1]["content"] = with_notes(messages[1]["content"], notes)
             async with gate:
                 try:
                     reply = await complete(messages)
@@ -133,6 +149,7 @@ def main() -> None:
     parser.add_argument("--spots", type=Path, required=True)
     parser.add_argument("--held-out", action="store_true", help="the held-out matches (default: the training matches)")
     parser.add_argument("--hint", action="store_true", help="append each decision's price card to the system prompt")
+    parser.add_argument("--notes-file", type=Path, help="put this text at the top of each decision's scratchpad")
     parser.add_argument("--balance", action="store_true", help="equal numbers of clear fold and non-fold plans")
     parser.add_argument("--min-share", type=float, default=0.0, help="skip calls smaller than this share of the stack")
     parser.add_argument("--limit", type=int)

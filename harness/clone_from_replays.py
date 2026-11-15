@@ -129,6 +129,7 @@ async def play_replay_hand(match: dict, hand: dict, players: list) -> tuple[dict
 
 async def replay_hand(
     match: dict, hand: dict, seat: int, scratchpad: str = "", need_decision: bool = True,
+    *, include_forced: bool = False,
 ) -> tuple[list[dict], str, list[dict] | None, dict | None]:
     """The (messages, action) examples for `seat` in one hand; "" or why the hand was dropped; the messages of the
     seat's after-hand scratchpad turn; and the replayed hand record. `scratchpad` is what the seat's notes hold when
@@ -179,7 +180,9 @@ async def replay_hand(
         return [], "actions differ", None, None
     if list(played.get("final_board") or []) != list(hand["board"]):
         return [], "board differs", None, None
-    kept = [e for e in examples if not (e["logged"].get("fallback") or e["logged"].get("format_error") or e["logged"].get("afk"))]
+    kept = examples if include_forced else [
+        e for e in examples if not (e["logged"].get("fallback") or e["logged"].get("format_error") or e["logged"].get("afk"))
+    ]
     for e in kept:
         logged = e["logged"]
         e.update(match=match["id"], kind=match["kind"], hand=hand["hand_number"], hole=dealt[seat],

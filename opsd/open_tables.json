@@ -1,0 +1,1764 @@
+{
+ "open": {
+  "raise": {
+   "regular|*|*|22-88": [
+    -0.023129,
+    197
+   ],
+   "regular|*|*|99-JJ": [
+    0.008962,
+    96
+   ],
+   "regular|*|*|AK": [
+    0.002053,
+    130
+   ],
+   "regular|*|*|AQ-AJ": [
+    0.005571,
+    260
+   ],
+   "regular|*|*|Axo": [
+    -0.002179,
+    378
+   ],
+   "regular|*|*|Axs": [
+    0.002371,
+    152
+   ],
+   "regular|*|*|QQ+": [
+    0.008592,
+    110
+   ],
+   "regular|*|*|broadway_o": [
+    -0.002179,
+    416
+   ],
+   "regular|*|*|broadway_s": [
+    -0.035566,
+    161
+   ],
+   "regular|*|*|offsuit": [
+    -0.005039,
+    506
+   ],
+   "regular|*|*|suited": [
+    0.000693,
+    318
+   ],
+   "regular|*|*|suited_connector": [
+    -0.000456,
+    54
+   ],
+   "regular|BTN|*|22-88": [
+    -0.000868,
+    45
+   ],
+   "regular|BTN|*|99-JJ": [
+    -0.025647,
+    17
+   ],
+   "regular|BTN|*|AK": [
+    0.021481,
+    29
+   ],
+   "regular|BTN|*|AQ-AJ": [
+    -0.028533,
+    48
+   ],
+   "regular|BTN|*|Axo": [
+    -0.015668,
+    115
+   ],
+   "regular|BTN|*|Axs": [
+    -0.002107,
+    33
+   ],
+   "regular|BTN|*|QQ+": [
+    0.057578,
+    27
+   ],
+   "regular|BTN|*|broadway_o": [
+    -0.002614,
+    106
+   ],
+   "regular|BTN|*|broadway_s": [
+    -0.009917,
+    36
+   ],
+   "regular|BTN|*|offsuit": [
+    -0.001867,
+    300
+   ],
+   "regular|BTN|*|suited": [
+    0.008268,
+    168
+   ],
+   "regular|BTN|*|suited_connector": [
+    0.021325,
+    22
+   ],
+   "regular|BTN|3|22-88": [
+    0.054996,
+    4
+   ],
+   "regular|BTN|3|99-JJ": [
+    -0.000802,
+    2
+   ],
+   "regular|BTN|3|AK": [
+    -0.005058,
+    1
+   ],
+   "regular|BTN|3|AQ-AJ": [
+    0.006342,
+    5
+   ],
+   "regular|BTN|3|Axo": [
+    0.002069,
+    10
+   ],
+   "regular|BTN|3|Axs": [
+    0.000703,
+    4
+   ],
+   "regular|BTN|3|broadway_o": [
+    0.040153,
+    6
+   ],
+   "regular|BTN|3|broadway_s": [
+    -0.005606,
+    1
+   ],
+   "regular|BTN|3|offsuit": [
+    -0.005315,
+    34
+   ],
+   "regular|BTN|3|suited": [
+    -0.003694,
+    18
+   ],
+   "regular|BTN|3|suited_connector": [
+    0.0,
+    1
+   ],
+   "regular|BTN|4|22-88": [
+    0.008776,
+    7
+   ],
+   "regular|BTN|4|99-JJ": [
+    0.028295,
+    2
+   ],
+   "regular|BTN|4|AK": [
+    -0.096136,
+    4
+   ],
+   "regular|BTN|4|AQ-AJ": [
+    0.023034,
+    6
+   ],
+   "regular|BTN|4|Axo": [
+    -0.017732,
+    23
+   ],
+   "regular|BTN|4|Axs": [
+    0.00098,
+    4
+   ],
+   "regular|BTN|4|QQ+": [
+    -0.001247,
+    4
+   ],
+   "regular|BTN|4|broadway_o": [
+    -0.008033,
+    18
+   ],
+   "regular|BTN|4|broadway_s": [
+    -0.007622,
+    9
+   ],
+   "regular|BTN|4|offsuit": [
+    -0.002199,
+    48
+   ],
+   "regular|BTN|4|suited": [
+    -0.000734,
+    35
+   ],
+   "regular|BTN|4|suited_connector": [
+    0.020797,
+    5
+   ],
+   "regular|BTN|5|22-88": [
+    0.010656,
+    16
+   ],
+   "regular|BTN|5|99-JJ": [
+    -0.130723,
+    3
+   ],
+   "regular|BTN|5|AK": [
+    0.096852,
+    5
+   ],
+   "regular|BTN|5|AQ-AJ": [
+    -0.000924,
+    15
+   ],
+   "regular|BTN|5|Axo": [
+    -0.021533,
+    39
+   ],
+   "regular|BTN|5|Axs": [
+    -0.007542,
+    13
+   ],
+   "regular|BTN|5|QQ+": [
+    0.087544,
+    10
+   ],
+   "regular|BTN|5|broadway_o": [
+    -0.011894,
+    27
+   ],
+   "regular|BTN|5|broadway_s": [
+    -0.072566,
+    9
+   ],
+   "regular|BTN|5|offsuit": [
+    0.00037,
+    91
+   ],
+   "regular|BTN|5|suited": [
+    0.00261,
+    54
+   ],
+   "regular|BTN|5|suited_connector": [
+    0.028957,
+    12
+   ],
+   "regular|BTN|6|22-88": [
+    -0.027277,
+    18
+   ],
+   "regular|BTN|6|99-JJ": [
+    -0.009882,
+    10
+   ],
+   "regular|BTN|6|AK": [
+    0.027806,
+    19
+   ],
+   "regular|BTN|6|AQ-AJ": [
+    -0.069346,
+    22
+   ],
+   "regular|BTN|6|Axo": [
+    -0.013369,
+    43
+   ],
+   "regular|BTN|6|Axs": [
+    0.001815,
+    12
+   ],
+   "regular|BTN|6|QQ+": [
+    0.052628,
+    13
+   ],
+   "regular|BTN|6|broadway_o": [
+    -0.000949,
+    55
+   ],
+   "regular|BTN|6|broadway_s": [
+    0.021782,
+    17
+   ],
+   "regular|BTN|6|offsuit": [
+    -0.002422,
+    127
+   ],
+   "regular|BTN|6|suited": [
+    0.021971,
+    61
+   ],
+   "regular|BTN|6|suited_connector": [
+    0.004423,
+    4
+   ],
+   "regular|CO|*|22-88": [
+    -0.001155,
+    53
+   ],
+   "regular|CO|*|99-JJ": [
+    -0.038857,
+    20
+   ],
+   "regular|CO|*|AK": [
+    0.023011,
+    28
+   ],
+   "regular|CO|*|AQ-AJ": [
+    0.033395,
+    77
+   ],
+   "regular|CO|*|Axo": [
+    0.025905,
+    101
+   ],
+   "regular|CO|*|Axs": [
+    -0.038351,
+    30
+   ],
+   "regular|CO|*|QQ+": [
+    0.056544,
+    20
+   ],
+   "regular|CO|*|broadway_o": [
+    -0.016097,
+    110
+   ],
+   "regular|CO|*|broadway_s": [
+    0.019135,
+    28
+   ],
+   "regular|CO|*|offsuit": [
+    -0.022661,
+    76
+   ],
+   "regular|CO|*|suited": [
+    -0.003336,
+    60
+   ],
+   "regular|CO|*|suited_connector": [
+    -0.024075,
+    14
+   ],
+   "regular|CO|4|22-88": [
+    0.005274,
+    18
+   ],
+   "regular|CO|4|99-JJ": [
+    -0.012544,
+    3
+   ],
+   "regular|CO|4|AK": [
+    0.113363,
+    3
+   ],
+   "regular|CO|4|AQ-AJ": [
+    -0.031268,
+    9
+   ],
+   "regular|CO|4|Axo": [
+    -0.013387,
+    24
+   ],
+   "regular|CO|4|Axs": [
+    0.010194,
+    5
+   ],
+   "regular|CO|4|QQ+": [
+    0.17522,
+    3
+   ],
+   "regular|CO|4|broadway_o": [
+    -0.020496,
+    18
+   ],
+   "regular|CO|4|broadway_s": [
+    0.00443,
+    3
+   ],
+   "regular|CO|4|offsuit": [
+    -0.000972,
+    8
+   ],
+   "regular|CO|4|suited": [
+    -0.013929,
+    11
+   ],
+   "regular|CO|4|suited_connector": [
+    -0.021262,
+    1
+   ],
+   "regular|CO|5|22-88": [
+    0.008256,
+    13
+   ],
+   "regular|CO|5|99-JJ": [
+    -0.018188,
+    6
+   ],
+   "regular|CO|5|AK": [
+    0.045563,
+    8
+   ],
+   "regular|CO|5|AQ-AJ": [
+    0.053955,
+    27
+   ],
+   "regular|CO|5|Axo": [
+    0.026652,
+    31
+   ],
+   "regular|CO|5|Axs": [
+    -0.043231,
+    11
+   ],
+   "regular|CO|5|QQ+": [
+    -0.067077,
+    6
+   ],
+   "regular|CO|5|broadway_o": [
+    -0.010614,
+    43
+   ],
+   "regular|CO|5|broadway_s": [
+    0.052235,
+    10
+   ],
+   "regular|CO|5|offsuit": [
+    0.005243,
+    24
+   ],
+   "regular|CO|5|suited": [
+    0.010369,
+    19
+   ],
+   "regular|CO|5|suited_connector": [
+    0.000154,
+    3
+   ],
+   "regular|CO|6|22-88": [
+    -0.011977,
+    22
+   ],
+   "regular|CO|6|99-JJ": [
+    -0.057307,
+    11
+   ],
+   "regular|CO|6|AK": [
+    -0.003546,
+    17
+   ],
+   "regular|CO|6|AQ-AJ": [
+    0.03405,
+    41
+   ],
+   "regular|CO|6|Axo": [
+    0.045903,
+    46
+   ],
+   "regular|CO|6|Axs": [
+    -0.051854,
+    14
+   ],
+   "regular|CO|6|QQ+": [
+    0.091607,
+    11
+   ],
+   "regular|CO|6|broadway_o": [
+    -0.019292,
+    49
+   ],
+   "regular|CO|6|broadway_s": [
+    9e-06,
+    15
+   ],
+   "regular|CO|6|offsuit": [
+    -0.041824,
+    44
+   ],
+   "regular|CO|6|suited": [
+    -0.008131,
+    30
+   ],
+   "regular|CO|6|suited_connector": [
+    -0.031626,
+    10
+   ],
+   "regular|HJ|*|22-88": [
+    -0.010961,
+    41
+   ],
+   "regular|HJ|*|99-JJ": [
+    0.011009,
+    38
+   ],
+   "regular|HJ|*|AK": [
+    -0.009437,
+    42
+   ],
+   "regular|HJ|*|AQ-AJ": [
+    0.004068,
+    66
+   ],
+   "regular|HJ|*|Axo": [
+    -0.014237,
+    74
+   ],
+   "regular|HJ|*|Axs": [
+    0.025956,
+    39
+   ],
+   "regular|HJ|*|QQ+": [
+    -0.072344,
+    19
+   ],
+   "regular|HJ|*|broadway_o": [
+    0.014935,
+    92
+   ],
+   "regular|HJ|*|broadway_s": [
+    -0.066053,
+    40
+   ],
+   "regular|HJ|*|offsuit": [
+    0.004318,
+    35
+   ],
+   "regular|HJ|*|suited": [
+    -0.057062,
+    37
+   ],
+   "regular|HJ|*|suited_connector": [
+    -0.021269,
+    8
+   ],
+   "regular|HJ|5|22-88": [
+    0.018218,
+    22
+   ],
+   "regular|HJ|5|99-JJ": [
+    -0.001192,
+    15
+   ],
+   "regular|HJ|5|AK": [
+    -0.002802,
+    16
+   ],
+   "regular|HJ|5|AQ-AJ": [
+    0.049499,
+    27
+   ],
+   "regular|HJ|5|Axo": [
+    -0.019516,
+    31
+   ],
+   "regular|HJ|5|Axs": [
+    0.105019,
+    12
+   ],
+   "regular|HJ|5|QQ+": [
+    -0.030688,
+    4
+   ],
+   "regular|HJ|5|broadway_o": [
+    0.034215,
+    38
+   ],
+   "regular|HJ|5|broadway_s": [
+    -0.023279,
+    11
+   ],
+   "regular|HJ|5|offsuit": [
+    -0.014425,
+    9
+   ],
+   "regular|HJ|5|suited": [
+    -0.064299,
+    13
+   ],
+   "regular|HJ|5|suited_connector": [
+    0.012159,
+    4
+   ],
+   "regular|HJ|6|22-88": [
+    -0.044747,
+    19
+   ],
+   "regular|HJ|6|99-JJ": [
+    0.018967,
+    23
+   ],
+   "regular|HJ|6|AK": [
+    -0.01352,
+    26
+   ],
+   "regular|HJ|6|AQ-AJ": [
+    -0.027384,
+    39
+   ],
+   "regular|HJ|6|Axo": [
+    -0.010432,
+    43
+   ],
+   "regular|HJ|6|Axs": [
+    -0.009184,
+    27
+   ],
+   "regular|HJ|6|QQ+": [
+    -0.083452,
+    15
+   ],
+   "regular|HJ|6|broadway_o": [
+    0.001369,
+    54
+   ],
+   "regular|HJ|6|broadway_s": [
+    -0.082278,
+    29
+   ],
+   "regular|HJ|6|offsuit": [
+    0.010807,
+    26
+   ],
+   "regular|HJ|6|suited": [
+    -0.053142,
+    24
+   ],
+   "regular|HJ|6|suited_connector": [
+    -0.054696,
+    4
+   ],
+   "regular|SB|*|22-88": [
+    -0.06262,
+    16
+   ],
+   "regular|SB|*|99-JJ": [
+    0.036485,
+    8
+   ],
+   "regular|SB|*|AK": [
+    -0.075726,
+    11
+   ],
+   "regular|SB|*|AQ-AJ": [
+    -0.020178,
+    16
+   ],
+   "regular|SB|*|Axo": [
+    -0.004267,
+    49
+   ],
+   "regular|SB|*|Axs": [
+    -0.00165,
+    14
+   ],
+   "regular|SB|*|QQ+": [
+    0.027425,
+    18
+   ],
+   "regular|SB|*|broadway_o": [
+    0.021332,
+    46
+   ],
+   "regular|SB|*|broadway_s": [
+    -0.029707,
+    19
+   ],
+   "regular|SB|*|offsuit": [
+    0.00489,
+    75
+   ],
+   "regular|SB|*|suited": [
+    0.010036,
+    43
+   ],
+   "regular|SB|*|suited_connector": [
+    0.001804,
+    6
+   ],
+   "regular|SB|2|22-88": [
+    0.000412,
+    1
+   ],
+   "regular|SB|2|AQ-AJ": [
+    0.024914,
+    2
+   ],
+   "regular|SB|2|Axo": [
+    0.0,
+    1
+   ],
+   "regular|SB|2|Axs": [
+    0.083814,
+    1
+   ],
+   "regular|SB|2|QQ+": [
+    0.001314,
+    2
+   ],
+   "regular|SB|2|broadway_o": [
+    0.008175,
+    6
+   ],
+   "regular|SB|2|broadway_s": [
+    -0.000741,
+    1
+   ],
+   "regular|SB|2|offsuit": [
+    0.001331,
+    9
+   ],
+   "regular|SB|2|suited": [
+    -0.000285,
+    3
+   ],
+   "regular|SB|3|AK": [
+    0.002677,
+    1
+   ],
+   "regular|SB|3|AQ-AJ": [
+    -0.004749,
+    1
+   ],
+   "regular|SB|3|Axo": [
+    0.001692,
+    2
+   ],
+   "regular|SB|3|QQ+": [
+    0.00081,
+    1
+   ],
+   "regular|SB|3|broadway_o": [
+    0.001605,
+    4
+   ],
+   "regular|SB|3|offsuit": [
+    0.001939,
+    10
+   ],
+   "regular|SB|3|suited": [
+    -0.012202,
+    6
+   ],
+   "regular|SB|3|suited_connector": [
+    0.0,
+    1
+   ],
+   "regular|SB|4|22-88": [
+    0.002992,
+    3
+   ],
+   "regular|SB|4|99-JJ": [
+    0.008376,
+    3
+   ],
+   "regular|SB|4|AK": [
+    0.014241,
+    1
+   ],
+   "regular|SB|4|AQ-AJ": [
+    0.001462,
+    1
+   ],
+   "regular|SB|4|Axo": [
+    0.011571,
+    8
+   ],
+   "regular|SB|4|Axs": [
+    0.007539,
+    2
+   ],
+   "regular|SB|4|QQ+": [
+    0.012601,
+    2
+   ],
+   "regular|SB|4|broadway_o": [
+    -0.001831,
+    9
+   ],
+   "regular|SB|4|broadway_s": [
+    0.011861,
+    3
+   ],
+   "regular|SB|4|offsuit": [
+    0.001159,
+    12
+   ],
+   "regular|SB|4|suited": [
+    0.01112,
+    11
+   ],
+   "regular|SB|4|suited_connector": [
+    -0.007742,
+    1
+   ],
+   "regular|SB|5|22-88": [
+    -0.259978,
+    4
+   ],
+   "regular|SB|5|99-JJ": [
+    0.062146,
+    4
+   ],
+   "regular|SB|5|AK": [
+    0.014364,
+    4
+   ],
+   "regular|SB|5|AQ-AJ": [
+    -0.339683,
+    2
+   ],
+   "regular|SB|5|Axo": [
+    0.00039,
+    10
+   ],
+   "regular|SB|5|Axs": [
+    0.005977,
+    3
+   ],
+   "regular|SB|5|QQ+": [
+    0.003836,
+    2
+   ],
+   "regular|SB|5|broadway_o": [
+    0.008459,
+    13
+   ],
+   "regular|SB|5|broadway_s": [
+    0.005497,
+    8
+   ],
+   "regular|SB|5|offsuit": [
+    0.004402,
+    19
+   ],
+   "regular|SB|5|suited": [
+    0.011481,
+    15
+   ],
+   "regular|SB|5|suited_connector": [
+    -0.014296,
+    2
+   ],
+   "regular|SB|6|22-88": [
+    0.003575,
+    8
+   ],
+   "regular|SB|6|99-JJ": [
+    0.018165,
+    1
+   ],
+   "regular|SB|6|AK": [
+    -0.181472,
+    5
+   ],
+   "regular|SB|6|AQ-AJ": [
+    0.030997,
+    10
+   ],
+   "regular|SB|6|Axo": [
+    -0.011033,
+    28
+   ],
+   "regular|SB|6|Axs": [
+    -0.017491,
+    8
+   ],
+   "regular|SB|6|QQ+": [
+    0.041575,
+    11
+   ],
+   "regular|SB|6|broadway_o": [
+    0.059453,
+    14
+   ],
+   "regular|SB|6|broadway_s": [
+    -0.091894,
+    7
+   ],
+   "regular|SB|6|offsuit": [
+    0.009515,
+    25
+   ],
+   "regular|SB|6|suited": [
+    0.026385,
+    8
+   ],
+   "regular|SB|6|suited_connector": [
+    0.02358,
+    2
+   ],
+   "regular|UTG|*|22-88": [
+    -0.071542,
+    42
+   ],
+   "regular|UTG|*|99-JJ": [
+    0.104868,
+    13
+   ],
+   "regular|UTG|*|AK": [
+    0.011448,
+    20
+   ],
+   "regular|UTG|*|AQ-AJ": [
+    0.005677,
+    53
+   ],
+   "regular|UTG|*|Axo": [
+    -0.009631,
+    39
+   ],
+   "regular|UTG|*|Axs": [
+    0.016425,
+    36
+   ],
+   "regular|UTG|*|QQ+": [
+    -0.033055,
+    26
+   ],
+   "regular|UTG|*|broadway_o": [
+    -0.019584,
+    62
+   ],
+   "regular|UTG|*|broadway_s": [
+    -0.07101,
+    38
+   ],
+   "regular|UTG|*|offsuit": [
+    -0.03927,
+    20
+   ],
+   "regular|UTG|*|suited": [
+    0.071129,
+    10
+   ],
+   "regular|UTG|*|suited_connector": [
+    0.000642,
+    4
+   ],
+   "regular|UTG|6|22-88": [
+    -0.071542,
+    42
+   ],
+   "regular|UTG|6|99-JJ": [
+    0.104868,
+    13
+   ],
+   "regular|UTG|6|AK": [
+    0.011448,
+    20
+   ],
+   "regular|UTG|6|AQ-AJ": [
+    0.005677,
+    53
+   ],
+   "regular|UTG|6|Axo": [
+    -0.009631,
+    39
+   ],
+   "regular|UTG|6|Axs": [
+    0.016425,
+    36
+   ],
+   "regular|UTG|6|QQ+": [
+    -0.033055,
+    26
+   ],
+   "regular|UTG|6|broadway_o": [
+    -0.019584,
+    62
+   ],
+   "regular|UTG|6|broadway_s": [
+    -0.07101,
+    38
+   ],
+   "regular|UTG|6|offsuit": [
+    -0.03927,
+    20
+   ],
+   "regular|UTG|6|suited": [
+    0.071129,
+    10
+   ],
+   "regular|UTG|6|suited_connector": [
+    0.000642,
+    4
+   ],
+   "short|*|*|Axo": [
+    0.080231,
+    1
+   ],
+   "short|*|*|broadway_o": [
+    -0.060173,
+    1
+   ],
+   "short|UTG|*|Axo": [
+    0.080231,
+    1
+   ],
+   "short|UTG|*|broadway_o": [
+    -0.060173,
+    1
+   ],
+   "short|UTG|6|Axo": [
+    0.080231,
+    1
+   ],
+   "short|UTG|6|broadway_o": [
+    -0.060173,
+    1
+   ]
+  },
+  "fold": {
+   "regular|BTN|*|*": [
+    0.001049,
+    1720
+   ],
+   "regular|BTN|3|*": [
+    0.002133,
+    156
+   ],
+   "regular|BTN|3|22-88": [
+    0.0,
+    1
+   ],
+   "regular|BTN|3|Axo": [
+    0.0,
+    7
+   ],
+   "regular|BTN|3|Axs": [
+    0.0,
+    2
+   ],
+   "regular|BTN|3|broadway_o": [
+    0.035916,
+    5
+   ],
+   "regular|BTN|3|offsuit": [
+    0.0,
+    120
+   ],
+   "regular|BTN|3|suited": [
+    0.0,
+    17
+   ],
+   "regular|BTN|3|suited_connector": [
+    0.038283,
+    4
+   ],
+   "regular|BTN|4|*": [
+    0.000314,
+    293
+   ],
+   "regular|BTN|4|22-88": [
+    0.0,
+    1
+   ],
+   "regular|BTN|4|AQ-AJ": [
+    0.0,
+    2
+   ],
+   "regular|BTN|4|Axo": [
+    0.0,
+    12
+   ],
+   "regular|BTN|4|Axs": [
+    0.0,
+    3
+   ],
+   "regular|BTN|4|broadway_o": [
+    0.0,
+    6
+   ],
+   "regular|BTN|4|broadway_s": [
+    0.0,
+    5
+   ],
+   "regular|BTN|4|offsuit": [
+    0.000649,
+    214
+   ],
+   "regular|BTN|4|suited": [
+    -0.00102,
+    46
+   ],
+   "regular|BTN|4|suited_connector": [
+    0.0,
+    4
+   ],
+   "regular|BTN|5|*": [
+    0.001388,
+    515
+   ],
+   "regular|BTN|5|22-88": [
+    0.0,
+    7
+   ],
+   "regular|BTN|5|AQ-AJ": [
+    0.0,
+    3
+   ],
+   "regular|BTN|5|Axo": [
+    0.0,
+    23
+   ],
+   "regular|BTN|5|Axs": [
+    0.0,
+    8
+   ],
+   "regular|BTN|5|broadway_o": [
+    0.0,
+    10
+   ],
+   "regular|BTN|5|offsuit": [
+    0.001953,
+    366
+   ],
+   "regular|BTN|5|suited": [
+    0.0,
+    89
+   ],
+   "regular|BTN|5|suited_connector": [
+    0.0,
+    9
+   ],
+   "regular|BTN|6|*": [
+    0.000879,
+    756
+   ],
+   "regular|BTN|6|22-88": [
+    0.0,
+    4
+   ],
+   "regular|BTN|6|99-JJ": [
+    0.0,
+    1
+   ],
+   "regular|BTN|6|AQ-AJ": [
+    0.105749,
+    2
+   ],
+   "regular|BTN|6|Axo": [
+    0.0,
+    50
+   ],
+   "regular|BTN|6|Axs": [
+    0.0,
+    11
+   ],
+   "regular|BTN|6|broadway_o": [
+    0.0,
+    14
+   ],
+   "regular|BTN|6|broadway_s": [
+    0.0,
+    4
+   ],
+   "regular|BTN|6|offsuit": [
+    0.000843,
+    537
+   ],
+   "regular|BTN|6|suited": [
+    0.0,
+    123
+   ],
+   "regular|BTN|6|suited_connector": [
+    0.0,
+    10
+   ],
+   "regular|CO|*|*": [
+    0.002425,
+    2962
+   ],
+   "regular|CO|4|*": [
+    0.002737,
+    574
+   ],
+   "regular|CO|4|22-88": [
+    0.0,
+    7
+   ],
+   "regular|CO|4|AQ-AJ": [
+    0.0,
+    2
+   ],
+   "regular|CO|4|Axo": [
+    0.0,
+    38
+   ],
+   "regular|CO|4|Axs": [
+    0.0,
+    6
+   ],
+   "regular|CO|4|broadway_o": [
+    0.0,
+    14
+   ],
+   "regular|CO|4|broadway_s": [
+    0.0,
+    2
+   ],
+   "regular|CO|4|offsuit": [
+    0.00347,
+    397
+   ],
+   "regular|CO|4|suited": [
+    0.001938,
+    100
+   ],
+   "regular|CO|4|suited_connector": [
+    0.0,
+    8
+   ],
+   "regular|CO|5|*": [
+    0.002517,
+    976
+   ],
+   "regular|CO|5|22-88": [
+    0.0,
+    11
+   ],
+   "regular|CO|5|99-JJ": [
+    0.0,
+    1
+   ],
+   "regular|CO|5|AQ-AJ": [
+    0.0,
+    3
+   ],
+   "regular|CO|5|Axo": [
+    0.0,
+    57
+   ],
+   "regular|CO|5|Axs": [
+    0.0,
+    15
+   ],
+   "regular|CO|5|broadway_o": [
+    0.013682,
+    27
+   ],
+   "regular|CO|5|broadway_s": [
+    0.0,
+    8
+   ],
+   "regular|CO|5|offsuit": [
+    0.002928,
+    686
+   ],
+   "regular|CO|5|suited": [
+    0.000516,
+    151
+   ],
+   "regular|CO|5|suited_connector": [
+    0.0,
+    17
+   ],
+   "regular|CO|6|*": [
+    0.002234,
+    1412
+   ],
+   "regular|CO|6|22-88": [
+    0.0,
+    15
+   ],
+   "regular|CO|6|99-JJ": [
+    0.0,
+    1
+   ],
+   "regular|CO|6|AK": [
+    0.0,
+    2
+   ],
+   "regular|CO|6|AQ-AJ": [
+    0.033879,
+    4
+   ],
+   "regular|CO|6|Axo": [
+    0.003601,
+    94
+   ],
+   "regular|CO|6|Axs": [
+    0.0,
+    18
+   ],
+   "regular|CO|6|QQ+": [
+    0.0,
+    1
+   ],
+   "regular|CO|6|broadway_o": [
+    0.0,
+    39
+   ],
+   "regular|CO|6|broadway_s": [
+    0.0,
+    7
+   ],
+   "regular|CO|6|offsuit": [
+    0.002719,
+    986
+   ],
+   "regular|CO|6|suited": [
+    0.0,
+    221
+   ],
+   "regular|CO|6|suited_connector": [
+    0.0,
+    24
+   ],
+   "regular|HJ|*|*": [
+    0.004461,
+    3403
+   ],
+   "regular|HJ|5|*": [
+    0.003409,
+    1396
+   ],
+   "regular|HJ|5|22-88": [
+    0.039,
+    17
+   ],
+   "regular|HJ|5|99-JJ": [
+    0.0,
+    1
+   ],
+   "regular|HJ|5|AK": [
+    0.0,
+    1
+   ],
+   "regular|HJ|5|AQ-AJ": [
+    0.0,
+    5
+   ],
+   "regular|HJ|5|Axo": [
+    0.003657,
+    90
+   ],
+   "regular|HJ|5|Axs": [
+    0.0,
+    18
+   ],
+   "regular|HJ|5|broadway_o": [
+    0.0,
+    45
+   ],
+   "regular|HJ|5|broadway_s": [
+    0.0,
+    7
+   ],
+   "regular|HJ|5|offsuit": [
+    0.002786,
+    949
+   ],
+   "regular|HJ|5|suited": [
+    0.004421,
+    228
+   ],
+   "regular|HJ|5|suited_connector": [
+    0.003304,
+    35
+   ],
+   "regular|HJ|6|*": [
+    0.005193,
+    2007
+   ],
+   "regular|HJ|6|22-88": [
+    0.0,
+    21
+   ],
+   "regular|HJ|6|99-JJ": [
+    0.063393,
+    3
+   ],
+   "regular|HJ|6|AQ-AJ": [
+    0.030922,
+    7
+   ],
+   "regular|HJ|6|Axo": [
+    0.005685,
+    124
+   ],
+   "regular|HJ|6|Axs": [
+    0.0,
+    39
+   ],
+   "regular|HJ|6|broadway_o": [
+    0.0045,
+    47
+   ],
+   "regular|HJ|6|broadway_s": [
+    0.0,
+    12
+   ],
+   "regular|HJ|6|offsuit": [
+    0.005188,
+    1366
+   ],
+   "regular|HJ|6|suited": [
+    0.005672,
+    344
+   ],
+   "regular|HJ|6|suited_connector": [
+    0.001378,
+    44
+   ],
+   "regular|SB|*|*": [
+    -0.004579,
+    924
+   ],
+   "regular|SB|2|*": [
+    -8.6e-05,
+    69
+   ],
+   "regular|SB|2|22-88": [
+    0.0,
+    3
+   ],
+   "regular|SB|2|AQ-AJ": [
+    0.0,
+    2
+   ],
+   "regular|SB|2|Axo": [
+    0.0,
+    2
+   ],
+   "regular|SB|2|broadway_o": [
+    0.0,
+    3
+   ],
+   "regular|SB|2|broadway_s": [
+    -0.000129,
+    1
+   ],
+   "regular|SB|2|offsuit": [
+    -0.000109,
+    52
+   ],
+   "regular|SB|2|suited": [
+    -2.2e-05,
+    6
+   ],
+   "regular|SB|3|*": [
+    -0.000637,
+    59
+   ],
+   "regular|SB|3|22-88": [
+    -0.000626,
+    1
+   ],
+   "regular|SB|3|AQ-AJ": [
+    -0.000313,
+    2
+   ],
+   "regular|SB|3|broadway_o": [
+    0.0,
+    1
+   ],
+   "regular|SB|3|offsuit": [
+    -0.000632,
+    46
+   ],
+   "regular|SB|3|suited": [
+    -0.000786,
+    8
+   ],
+   "regular|SB|3|suited_connector": [
+    -0.000925,
+    1
+   ],
+   "regular|SB|4|*": [
+    -0.001893,
+    139
+   ],
+   "regular|SB|4|22-88": [
+    -0.00272,
+    1
+   ],
+   "regular|SB|4|99-JJ": [
+    -0.002846,
+    1
+   ],
+   "regular|SB|4|AQ-AJ": [
+    -0.001659,
+    1
+   ],
+   "regular|SB|4|Axo": [
+    -0.002844,
+    6
+   ],
+   "regular|SB|4|Axs": [
+    -0.002602,
+    2
+   ],
+   "regular|SB|4|broadway_o": [
+    -0.002636,
+    2
+   ],
+   "regular|SB|4|broadway_s": [
+    -0.003559,
+    2
+   ],
+   "regular|SB|4|offsuit": [
+    -0.001736,
+    104
+   ],
+   "regular|SB|4|suited": [
+    -0.002056,
+    19
+   ],
+   "regular|SB|4|suited_connector": [
+    -0.001659,
+    1
+   ],
+   "regular|SB|5|*": [
+    -0.003939,
+    251
+   ],
+   "regular|SB|5|22-88": [
+    -0.004009,
+    2
+   ],
+   "regular|SB|5|AQ-AJ": [
+    -0.002516,
+    2
+   ],
+   "regular|SB|5|Axo": [
+    -0.004237,
+    19
+   ],
+   "regular|SB|5|Axs": [
+    -0.005162,
+    2
+   ],
+   "regular|SB|5|broadway_o": [
+    -0.003763,
+    11
+   ],
+   "regular|SB|5|broadway_s": [
+    -0.004035,
+    1
+   ],
+   "regular|SB|5|offsuit": [
+    -0.003846,
+    186
+   ],
+   "regular|SB|5|suited": [
+    -0.00452,
+    25
+   ],
+   "regular|SB|5|suited_connector": [
+    -0.003648,
+    3
+   ],
+   "regular|SB|6|*": [
+    -0.007231,
+    406
+   ],
+   "regular|SB|6|22-88": [
+    -0.009144,
+    3
+   ],
+   "regular|SB|6|AQ-AJ": [
+    -0.009124,
+    2
+   ],
+   "regular|SB|6|Axo": [
+    -0.006989,
+    29
+   ],
+   "regular|SB|6|Axs": [
+    -0.007359,
+    6
+   ],
+   "regular|SB|6|broadway_o": [
+    -0.007103,
+    6
+   ],
+   "regular|SB|6|broadway_s": [
+    -0.005055,
+    1
+   ],
+   "regular|SB|6|offsuit": [
+    -0.007361,
+    299
+   ],
+   "regular|SB|6|suited": [
+    -0.006562,
+    52
+   ],
+   "regular|SB|6|suited_connector": [
+    -0.006661,
+    8
+   ],
+   "regular|UTG|*|*": [
+    0.006391,
+    2687
+   ],
+   "regular|UTG|6|*": [
+    0.006391,
+    2687
+   ],
+   "regular|UTG|6|22-88": [
+    -0.000529,
+    36
+   ],
+   "regular|UTG|6|99-JJ": [
+    0.0,
+    5
+   ],
+   "regular|UTG|6|AQ-AJ": [
+    0.0,
+    9
+   ],
+   "regular|UTG|6|Axo": [
+    0.001388,
+    183
+   ],
+   "regular|UTG|6|Axs": [
+    0.003534,
+    39
+   ],
+   "regular|UTG|6|broadway_o": [
+    0.014983,
+    88
+   ],
+   "regular|UTG|6|broadway_s": [
+    0.0,
+    24
+   ],
+   "regular|UTG|6|offsuit": [
+    0.007075,
+    1737
+   ],
+   "regular|UTG|6|suited": [
+    0.006162,
+    486
+   ],
+   "regular|UTG|6|suited_connector": [
+    0.002443,
+    80
+   ],
+   "short|BTN|*|*": [
+    0.0,
+    4
+   ],
+   "short|BTN|6|*": [
+    0.0,
+    4
+   ],
+   "short|BTN|6|offsuit": [
+    0.0,
+    4
+   ],
+   "short|CO|*|*": [
+    0.0,
+    10
+   ],
+   "short|CO|4|*": [
+    0.0,
+    1
+   ],
+   "short|CO|4|offsuit": [
+    0.0,
+    1
+   ],
+   "short|CO|5|*": [
+    0.0,
+    1
+   ],
+   "short|CO|5|offsuit": [
+    0.0,
+    1
+   ],
+   "short|CO|6|*": [
+    0.0,
+    8
+   ],
+   "short|CO|6|offsuit": [
+    0.0,
+    5
+   ],
+   "short|CO|6|suited": [
+    0.0,
+    3
+   ],
+   "short|HJ|*|*": [
+    0.0,
+    12
+   ],
+   "short|HJ|5|*": [
+    0.0,
+    1
+   ],
+   "short|HJ|5|offsuit": [
+    0.0,
+    1
+   ],
+   "short|HJ|6|*": [
+    0.0,
+    11
+   ],
+   "short|HJ|6|Axs": [
+    0.0,
+    1
+   ],
+   "short|HJ|6|offsuit": [
+    0.0,
+    9
+   ],
+   "short|HJ|6|suited": [
+    0.0,
+    1
+   ],
+   "short|SB|*|*": [
+    -0.004138,
+    10
+   ],
+   "short|SB|2|*": [
+    0.0,
+    2
+   ],
+   "short|SB|2|offsuit": [
+    0.0,
+    1
+   ],
+   "short|SB|2|suited": [
+    0.0,
+    1
+   ],
+   "short|SB|5|*": [
+    -0.00501,
+    5
+   ],
+   "short|SB|5|broadway_o": [
+    -0.004174,
+    1
+   ],
+   "short|SB|5|offsuit": [
+    -0.004871,
+    3
+   ],
+   "short|SB|5|suited": [
+    -0.006264,
+    1
+   ],
+   "short|SB|6|*": [
+    -0.005442,
+    3
+   ],
+   "short|SB|6|offsuit": [
+    -0.005442,
+    3
+   ],
+   "short|UTG|*|*": [
+    0.0,
+    14
+   ],
+   "short|UTG|6|*": [
+    0.0,
+    14
+   ],
+   "short|UTG|6|offsuit": [
+    0.0,
+    12
+   ],
+   "short|UTG|6|suited": [
+    0.0,
+    2
+   ]
+  }
+ }
+}

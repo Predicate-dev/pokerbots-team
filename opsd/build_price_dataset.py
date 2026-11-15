@@ -14,6 +14,8 @@ Two kinds of reply are used. A plain reply is what the model wrote for the offic
 the card's plan and its text does not talk about having been given anything. Both must be one valid `submit_action`
 call under the token cap. Decisions from held-out matches are left out, and within each kind folds and continues are
 kept in equal numbers.
+
+Use `--decision open --spots harness/runs/open_spots.jsonl` for replies collected with the open card.
 """
 
 from __future__ import annotations
@@ -30,6 +32,7 @@ from ac2.runtime import FunctionCall, HintedTask, HintMutation, HintSelection, M
 from ac2.sdk import Client
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import open_card  # noqa: E402
 from build_dataset import ITEMS, SUBMIT, TOOLS, official_system_prompt  # noqa: E402
 from build_from_gateway import fetch_spans  # noqa: E402
 from hint import SEPARATOR  # noqa: E402
@@ -46,10 +49,13 @@ LEAK = re.compile(
 
 
 def spot_key(c: dict) -> tuple:
-    return (c["hand"], tuple(c["hole"]), tuple(c["board"]), c["pot"], c["to_call"])
+    key = (c["hand"], tuple(c["hole"]), tuple(c["board"]), c["pot"], c["to_call"])
+    return key + (c["position"], c["live"]) if "position" in c else key
 
 
-def task_from_span(row: dict, max_tokens: int, held_out: set[tuple]) -> tuple[HintedTask | None, str, str, str]:
+def task_from_span(
+    row: dict, max_tokens: int, held_out: set[tuple], decision: str = "call",
+) -> tuple[HintedTask | None, str, str, str]:
     """(task, why it was dropped or "", the card's plan, "plain" or "hinted")."""
     try:
         prompt = ITEMS.validate_json(row["input"])
@@ -60,31 +66,44 @@ def task_from_span(row: dict, max_tokens: int, held_out: set[tuple]) -> tuple[Hi
     first = prompt[0] if prompt else None
     if not isinstance(first, Message) or first.role != "system" or not isinstance(first.content, str):
         return None, "not a decision", "", ""
+    opening = decision == "open"
+    make_card = open_card.card if opening else card
+    card_hint = open_card.hint if opening else hint
+    marker = open_card.MARK if opening else MARK
     if first.content == official:
         kind = "plain"  # the model's own reply to the official prompt
-    elif first.content.startswith(official + SEPARATOR + MARK):
+    elif first.content.startswith(official + SEPARATOR + marker):
         kind = "hinted"  # the reply it wrote with the card in front of it
         prompt = [first.model_copy(update={"content": official}), *prompt[1:]]
     else:
         return None, "not a decision", "", ""
-    c = card(prompt)
+    c = make_card(prompt)
     if c is None:
-        return None, "not a call decision", "", kind
+        return None, f"not a {decision} decision", "", kind
     if spot_key(c) in held_out:
         return None, "held out", "", kind
-    if c["plan"] == "close":
+    if not c.get("clear", c["plan"] != "close"):
         return None, "no clear plan", "", kind
+    guidance = card_hint(c)
+    if opening and kind == "hinted" and first.content != official + SEPARATOR + guidance:
+        return None, "open card changed since the request", c["plan"], kind
     calls = [item for item in reply if isinstance(item, FunctionCall)]
     if len(calls) != 1 or calls[0].name != SUBMIT:
         return None, "format", c["plan"], kind
     if int(row.get("tokens_out") or 0) >= max_tokens:
         return None, "truncated", c["plan"], kind
     try:
-        action = json.loads(calls[0].arguments).get("action")
+        args = json.loads(calls[0].arguments)
+        action = args.get("action")
     except (TypeError, ValueError, AttributeError):
         return None, "format", c["plan"], kind
-    if kind == "hinted":
+    if opening:
+        answer = open_card.answer(c, args)
+        if answer == "invalid":
+            return None, "opening action outside the card scope", c["plan"], kind
+    else:
         answer = "fold" if action == "fold" else "continue" if action in ("call", "raise") else "invalid"
+    if kind == "hinted":
         if answer != c["plan"]:
             return None, f"teacher chose {answer} against the card", c["plan"], kind
         if LEAK.search(row["output"]):
@@ -94,7 +113,7 @@ def task_from_span(row: dict, max_tokens: int, held_out: set[tuple]) -> tuple[Hi
         env_params={"tools": TOOLS, "source_trace": f"{row['trace_id']}:{row['span_id']}"},
         opsd_hint_selections=[
             HintSelection(
-                hint=hint(c),
+                hint=guidance,
                 rollout_prefix_len=len(prompt),
                 mutation=HintMutation(item_boundary=1, action="append_to_previous_item", separator=SEPARATOR),
             )
@@ -109,25 +128,28 @@ def main() -> None:
     parser.add_argument("--deployment-id", required=True, help="the teacher deployment's id, infer_...")
     parser.add_argument("--since", required=True, help="only spans from this ISO time on (UTC)")
     parser.add_argument("--dataset", required=True)
-    parser.add_argument("--spots", type=Path, required=True, help="harness/runs/price_spots.jsonl, to leave out held-out matches")
+    parser.add_argument("--decision", choices=("call", "open"), default="call")
+    parser.add_argument("--spots", type=Path, required=True, help="replay spots, to leave out held-out matches")
     parser.add_argument("--max-tokens", type=int, default=5_000)
     parser.add_argument("--upload", action="store_true", help="create the dataset on AC2 (default: print only)")
     parser.add_argument("--sample", type=int, default=0, help="print this many kept replies")
     args = parser.parse_args()
+    other = "raise" if args.decision == "open" else "continue"
+    make_card = open_card.card if args.decision == "open" else card
     held_out = set()
     for line in args.spots.read_text().splitlines():
         spot = json.loads(line)
-        if spot["held_out"] and (c := card(spot["messages"])) is not None:
+        if spot["held_out"] and (c := make_card(spot["messages"])) is not None:
             held_out.add(spot_key(c))
     client = Client(project=args.project)
     rows = fetch_spans(client, args.deployment_id, args.project, args.since)
     stats: Counter = Counter()
-    kept: dict[tuple[str, str], list[HintedTask]] = {(k, p): [] for k in ("plain", "hinted") for p in ("fold", "continue")}
+    kept: dict[tuple[str, str], list[HintedTask]] = {(k, p): [] for k in ("plain", "hinted") for p in ("fold", other)}
     seen: set[str] = set()
     for row in rows:
         if not row.get("input") or not row.get("output"):
             continue
-        task, problem, plan, kind = task_from_span(row, args.max_tokens, held_out)
+        task, problem, plan, kind = task_from_span(row, args.max_tokens, held_out, args.decision)
         if problem:
             stats[f"{kind}: {problem}" if kind else problem] += 1
             continue
@@ -140,9 +162,9 @@ def main() -> None:
         kept[(kind, plan)].append(task)
     rng = random.Random(0)
     tasks = []
-    for kind in ("plain", "hinted"):  # equal folds and continues within each kind
-        size = min(len(kept[(kind, "fold")]), len(kept[(kind, "continue")]))
-        tasks += rng.sample(kept[(kind, "fold")], size) + rng.sample(kept[(kind, "continue")], size)
+    for kind in ("plain", "hinted"):
+        size = min(len(kept[(kind, "fold")]), len(kept[(kind, other)]))
+        tasks += rng.sample(kept[(kind, "fold")], size) + rng.sample(kept[(kind, other)], size)
     rng.shuffle(tasks)
     print(json.dumps({"spans": len(rows), "tasks": len(tasks)} | {f"kept {k} {p}": len(v) for (k, p), v in kept.items()} | dict(stats)))
     for task in tasks[: args.sample]:

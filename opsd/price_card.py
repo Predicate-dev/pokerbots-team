@@ -103,24 +103,44 @@ def postflop_class(hole: list[str], board: list[str]) -> str:
     return "nothing"
 
 
-def parse(messages: list[Any]) -> dict[str, Any] | None:
-    """The spot a decision prompt describes, or None when it is not a fold-or-call decision."""
+def parse_state(messages: list[Any]) -> tuple[dict[str, Any], str] | None:
+    """Read the latest public table state and return the decision text that follows it."""
     users = [m for m in messages if _role(m) == "user" and isinstance(_content(m), str)]
     if not users:
         return None
     last = _content(users[-1])
-    state, call = None, _CALL.search(last)
+    state = None
     for state in _STATE.finditer(last):
         pass  # the last state block in the message
     hands = [h for m in users for h in _HAND.finditer(_content(m))]
-    if not state or not call or not hands:
+    if not state or not hands:
         return None
     seats = []
     for line in state["seats"].splitlines():
         seat = _SEAT.match(line)
         if not seat:
             return None
-        seats.append({"you": "(you)" in seat[2], "stack": int(seat[3]), "bet": int(seat[4]), "status": seat[5] or ""})
+        seats.append({
+            "seat": int(seat[1]), "you": "(you)" in seat[2], "button": "[button]" in seat[2],
+            "stack": int(seat[3]), "bet": int(seat[4]), "status": seat[5] or "",
+        })
+    return {
+        "hand": int(hands[-1][1]), "hands": int(hands[-1][2]), "street": state["street"], "hole": state["hole"].split(),
+        "board": [] if state["board"].strip() in ("-", "") else state["board"].split(), "pot": int(state["pot"]),
+        "live": sum(s["status"] != "out" for s in seats), "seats": seats,
+    }, last[state.end():]
+
+
+def parse(messages: list[Any]) -> dict[str, Any] | None:
+    """The spot a decision prompt describes, or None when it is not a fold-or-call decision."""
+    parsed = parse_state(messages)
+    if parsed is None:
+        return None
+    spot, rest = parsed
+    call = _CALL.search(rest)
+    if call is None:
+        return None
+    seats = spot.pop("seats")
     me = [s for s in seats if s["you"]]
     if len(me) != 1:
         return None
@@ -129,10 +149,8 @@ def parse(messages: list[Any]) -> dict[str, Any] | None:
     others = [s for s in seats if not s["you"] and s["status"] not in ("folded", "out")]
     committed = [s for s in others if s["bet"] >= me["bet"] + to_call or s["status"] == "all-in"]
     all_in = [s for s in committed if s["status"] == "all-in"]
-    return {
-        "hand": int(hands[-1][1]), "hands": int(hands[-1][2]), "street": state["street"], "hole": state["hole"].split(),
-        "board": [] if state["board"].strip() in ("-", "") else state["board"].split(), "pot": int(state["pot"]),
-        "to_call": to_call, "stack": me["stack"], "live": sum(s["status"] != "out" for s in seats),
+    return spot | {
+        "to_call": to_call, "stack": me["stack"],
         "committed": max(1, len(committed)), "all_in": len(all_in), "all_in_size": max((s["bet"] for s in all_in), default=0),
         "street_bet": me["bet"] + to_call,
     }

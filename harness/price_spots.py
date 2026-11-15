@@ -1,11 +1,15 @@
-"""Every sizeable call decision in the arena replays, with the seat's real equity: the data behind the price card.
+"""Extract call and first-in opening decisions from the arena's public replays.
 
     uv run python price_spots.py --replays <dir of replay .json> --out runs/price_spots.jsonl
+    uv run python price_spots.py --replays <dir of replay .json> --kind open --out runs/open_spots.jsonl
 
 `puzzles.py` keeps only stack-sized calls and river bets. This keeps every decision where a seat faced a bet worth at
 least `--min-share` of its stack (or any river bet), from every seat's point of view, and records what the seat could
 see (cards, price, share of stack, players left, opponents still in, whether a bettor is all-in) next to its equity
 against the hands that stayed in. `opsd/price_card.py` turns these into win-rate tables.
+
+The open mode keeps the first preflop decisions up to and including the first voluntary entry. It records the
+actual action and the before/after stacks and live player counts for measuring rating value.
 """
 
 from __future__ import annotations
@@ -14,6 +18,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+from collections.abc import Iterator
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
@@ -21,6 +26,7 @@ from clone_from_replays import replay_hand
 from puzzles import equity
 
 SELECT_ONE_IN = 6  # the same held-out matches as rl/make_puzzle_dataset.py
+FORCED = ("fallback", "coerced", "format_error", "afk", "timed_out", "token_cap", "sat_out", "error", "scripted")
 
 
 def held_out(match_id: str) -> bool:
@@ -75,25 +81,77 @@ async def spots(path: Path, min_share: float) -> list[dict]:
     return out
 
 
-def one_file(job: tuple[str, float]) -> list[dict]:
-    return asyncio.run(spots(Path(job[0]), job[1]))
+def first_in_actions(actions: list[dict]) -> Iterator[tuple[int, dict]]:
+    """Yield decisions facing the blinds until a player voluntarily enters the pot."""
+    for index, action in enumerate(actions):
+        if action["street"] != "preflop":
+            break
+        if action["to_call"] > 0:
+            yield index, action
+        if action["action"] != "fold":
+            break
+
+
+async def opening_spots(path: Path) -> list[dict]:
+    match = json.loads(path.read_text())
+    if match["kind"] != "ranked":
+        return []
+    match_id = match["id"]
+    entries = {s["seat"]: s["entry"]["name"] for s in match["seats"]}
+    places = {r["seat"]: r["place"] for r in match["results"]}
+    out = []
+    for hand in match["hands"]:
+        starting = {p["seat"]: p["starting_stack"] for p in hand["players"] if p["starting_stack"] > 0}
+        ending = {int(seat): chips for seat, chips in hand["stacks_after"].items() if chips > 0}
+        for index, action in first_in_actions(hand["actions"]):
+            seat = action["seat"]
+            examples, problem, _, _ = await replay_hand(match, hand, seat, include_forced=True)
+            if problem:
+                continue
+            example = next((e for e in examples if e["action_index"] == index), None)
+            if example is None:
+                continue
+            out.append({
+                "id": f"{match_id}:{hand['hand_number']}:{seat}:{index}",
+                "held_out": held_out(match_id),
+                "entry": entries[seat],
+                "took": action["action"],
+                "forced": any(action.get(flag) for flag in FORCED),
+                "raise_to": action["amount"] if action["action"] == "raise" else None,
+                "stack_before": starting[seat],
+                "stack_after": ending.get(seat, 0),
+                "live_after": len(ending),
+                "bust_place": None if seat in ending else places[seat],
+                "messages": example["messages"],
+            })
+    return out
+
+
+def one_file(job: tuple[str, str, float]) -> list[dict]:
+    path, kind, min_share = job
+    return asyncio.run(opening_spots(Path(path)) if kind == "open" else spots(Path(path), min_share))
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--replays", type=Path, required=True)
-    parser.add_argument("--out", type=Path, default=Path("runs/price_spots.jsonl"))
+    parser.add_argument("--kind", choices=("call", "open"), default="call")
+    parser.add_argument("--out", type=Path)
     parser.add_argument("--min-share", type=float, default=0.12, help="smallest call, as a share of the seat's stack")
     parser.add_argument("--workers", type=int, default=8)
     args = parser.parse_args()
-    jobs = [(str(p), args.min_share) for p in sorted(args.replays.glob("*.json"))]
+    out = args.out or Path("runs/open_spots.jsonl" if args.kind == "open" else "runs/price_spots.jsonl")
+    jobs = [(str(p), args.kind, args.min_share) for p in sorted(args.replays.glob("*.json"))]
+    if not jobs:
+        parser.error(f"no replay files found under {args.replays}")
     rows: list[dict] = []
     with ProcessPoolExecutor(args.workers) as pool:
         for found in pool.map(one_file, jobs):
             rows.extend(found)
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text("".join(json.dumps(r) + "\n" for r in rows))
-    print(f"{len(rows)} call decisions from {len(jobs)} replays written to {args.out} ({sum(r['held_out'] for r in rows)} held out)")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    print(f"{len(rows)} {args.kind} decisions from {len(jobs)} replays written to {out} "
+          f"({sum(r['held_out'] for r in rows)} held out)")
 
 
 if __name__ == "__main__":

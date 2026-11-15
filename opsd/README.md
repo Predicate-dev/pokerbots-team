@@ -194,3 +194,32 @@ uv run python opsd/train.py --dataset pokerbots-balanced-one-step --rollout-mode
 ```
 
 The preview checks the local configuration. A scheduled smoke launch is needed to verify that the org accepts it.
+
+## First-in open card
+
+The open card estimates the rating value of a small preflop open and a fold when every earlier player has folded.
+It uses the seat's hole cards, position relative to the button, players remaining and effective stack. The standard
+raise target is 2.5 big blinds. Historical raises of 2–3 big blinds supply the estimate. Limp and larger-raise
+outcomes are retained in the report. Sparse cells pool related observations. The card marks small or unsupported
+edges as unclear for teacher collection.
+
+Run from the repository root with a synced harness environment.
+
+```bash
+python3 arena_tools/fetch_replays.py arena_data
+(cd harness && uv run python price_spots.py --kind open --replays ../arena_data)
+uv run --project harness python opsd/build_price_tables.py --replays arena_data \
+  --open-spots harness/runs/open_spots.jsonl --open-report harness/runs/open-heldout.json
+uv run --project harness python opsd/simulate_cards.py --games 256 --seed 20272000
+```
+
+Both the stack curves and the open card are fit on training matches. The report measures stack value after each
+hand minus stack value before the blinds, with the recorded place used for a bust. It compares the policies on
+held-out cells with at least three observed folds and three standard raises. Archived actions reflect the choices
+of different opponents and give one observed outcome per decision. The CPU simulation tests the card on a shared
+scripted policy across house, mixed and tight tables.
+
+To collect opening traces from an existing teacher deployment, add
+`--decision open --spots harness/runs/open_spots.jsonl` to both `opsd/price_run.py` and
+`opsd/build_price_dataset.py`. Use `--hint --balance` on the collection step. The builder leaves out held-out
+spots and checks that a hinted reply follows the card with a legal small raise or fold.

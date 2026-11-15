@@ -10,6 +10,9 @@
 A reply is scored by the rating points its answer is worth over folding, from the spot's real equity and the stack
 values in `price_tables.json` (see `price_card.py`). With `--hint` the card's text is appended to the system prompt,
 exactly where OPSD puts a hint; the request is recorded by the AC2 gateway, which `build_price_dataset.py` reads.
+
+Use `--decision open --spots harness/runs/open_spots.jsonl` to ask first-in raise-or-fold decisions. Opening replies
+are reported by raise rate and agreement with the open card. Use the held-out replay report for opening values.
 """
 
 from __future__ import annotations
@@ -26,6 +29,7 @@ import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "harness" / "src"))
+import open_card  # noqa: E402
 from hint import SEPARATOR  # noqa: E402
 from poker_harness.completions import GATEWAY_URL, relay_completion, with_preset  # noqa: E402
 from poker_harness.prompts import talk_fields  # noqa: E402
@@ -55,15 +59,21 @@ async def run(args: argparse.Namespace) -> None:
     key = os.environ.get("AC2_API_KEY")
     if not key:
         raise SystemExit("export AC2_API_KEY first")
+    opening = args.decision == "open"
+    make_card = open_card.card if opening else card
+    card_hint = open_card.hint if opening else hint
+    other = "raise" if opening else "continue"
     spots = [json.loads(line) for line in args.spots.read_text().splitlines() if line.strip()]
-    spots = [s for s in spots if s["held_out"] == args.held_out and s.get("share", 1) >= args.min_share]
-    rows = [s | {"card": c} for s in spots if (c := card(s["messages"])) is not None]
+    spots = [s for s in spots if s["held_out"] == args.held_out and not s.get("forced") and s.get("share", 1) >= args.min_share]
+    rows = [s | {"card": c} for s in spots if (c := make_card(s["messages"])) is not None]
+    if opening and (args.hint or args.balance):
+        rows = [r for r in rows if r["card"]["clear"]]
     rng = random.Random(0)
     if args.balance:  # as many clear folds as clear continues, nothing close
         folds = [r for r in rows if r["card"]["plan"] == "fold"]
-        continues = [r for r in rows if r["card"]["plan"] == "continue"]
-        size = min(len(folds), len(continues))
-        rows = rng.sample(folds, size) + rng.sample(continues, size)
+        others = [r for r in rows if r["card"]["plan"] == other]
+        size = min(len(folds), len(others))
+        rows = rng.sample(folds, size) + rng.sample(others, size)
     rng.shuffle(rows)
     if args.limit:
         rows = rows[: args.limit]
@@ -76,25 +86,36 @@ async def run(args: argparse.Namespace) -> None:
         async def one(row: dict) -> dict:
             messages = [dict(m) for m in row["messages"]]
             if args.hint:
-                messages[0]["content"] = messages[0]["content"] + SEPARATOR + hint(row["card"])
+                messages[0]["content"] = messages[0]["content"] + SEPARATOR + card_hint(row["card"])
             async with gate:
                 try:
                     reply = await complete(messages)
                     arguments = reply.tool_arguments
                     parsed = json.loads(arguments) if isinstance(arguments, str) else (arguments or {})
-                    action = str(parsed.get("action", "")) if not reply.truncated else ""
+                    if reply.truncated or (opening and len(reply.tool_calls) != 1):
+                        parsed = {}
+                    action = str(parsed.get("action", ""))
                     extra = {"reasoning": reply.reasoning, "text": reply.text, "out_tokens": reply.out_tokens, "calls": len(reply.tool_calls)}
                 except Exception as exc:  # noqa: BLE001
-                    action, extra = "", {"error": type(exc).__name__}
-            answer = "fold" if action == "fold" else "continue" if action in ("call", "raise", "bet") else "invalid"
+                    action, parsed, extra = "", {}, {"error": type(exc).__name__}
+            if opening:
+                answer = open_card.answer(row["card"], parsed)
+            else:
+                answer = "fold" if action == "fold" else "continue" if action in ("call", "raise", "bet") else "invalid"
             return row | {"answer": answer, "action": action} | extra
 
         done = list(await asyncio.gather(*(one(r) for r in rows)))
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text("".join(json.dumps({k: v for k, v in r.items() if k != "messages"}) + "\n" for r in done))
-    print(f"{args.model}{' with the price card' if args.hint else ''}: {len(done)} decisions from "
+    print(f"{args.model}{' with the card' if args.hint else ''}: {len(done)} {args.decision} decisions from "
           f"{'held-out' if args.held_out else 'training'} matches")
+    if opening:
+        clear = [r for r in done if r["card"]["clear"]]
+        print(f"  small raises {sum(r['answer'] == 'raise' for r in done)}/{len(done)} | "
+              f"agrees with clear plans {sum(r['answer'] == r['card']['plan'] for r in clear)}/{len(clear)} | "
+              f"invalid {sum(r['answer'] == 'invalid' for r in done)}")
+        return
     print(summarize("all", done))
     for name, keep in (
         ("preflop", lambda r: r["card"]["street"] == "preflop"), ("postflop", lambda r: r["card"]["street"] != "preflop"),
@@ -108,10 +129,11 @@ async def run(args: argparse.Namespace) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--model", required=True)
+    parser.add_argument("--decision", choices=("call", "open"), default="call")
     parser.add_argument("--spots", type=Path, required=True)
     parser.add_argument("--held-out", action="store_true", help="the held-out matches (default: the training matches)")
     parser.add_argument("--hint", action="store_true", help="append each decision's price card to the system prompt")
-    parser.add_argument("--balance", action="store_true", help="equal numbers of clear folds and clear continues")
+    parser.add_argument("--balance", action="store_true", help="equal numbers of clear fold and non-fold plans")
     parser.add_argument("--min-share", type=float, default=0.0, help="skip calls smaller than this share of the stack")
     parser.add_argument("--limit", type=int)
     parser.add_argument("--parallel", type=int, default=16)

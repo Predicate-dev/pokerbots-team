@@ -103,6 +103,33 @@ uv run python opsd/build_from_gateway.py --deployment-id <infer_...> --dataset p
 uv run python opsd/build_from_gateway.py --deployment-id <infer_...> --dataset pokerbots-opsd-tight --upload
 ```
 
+## Table talk defense
+
+Use the paired test to compare the official prompt with the same prompt plus guidance to ignore other players'
+chatter. Both arms see the same scripted lineup and types of chatter. Try fresh seeds and a mixed lineup with
+shuffled chatter before using the result to choose a training run. Also check a quiet lineup for loss of placement
+or reliability.
+
+```bash
+# From harness/
+uv run python score_local.py --model vals-hackathon/entry --table-talk-defense-ablation \
+  --talk-mode shuffled --lineup mixed --seed 960510 --out runs/talk-defense
+```
+
+On a table you host locally, `play_local.py --ignore-table-talk` removes quoted opponent messages from the
+evaluated seat's action prompts and recaps. Cards, betting actions, and tool schemas stay available to the seat.
+The arena hosts its own table, so evaluate the trained checkpoint with the official prompt and chatter present.
+
+```bash
+# From the repository root. The builder prints counts by default.
+uv run python opsd/build_from_gateway.py --deployment-id <infer_...> \
+  --dataset pokerbots-opsd-talk-defense --table-talk-defense
+```
+
+Use base-model traces from training games. The action hint teaches the model to ignore chatter when deciding.
+The cleanup hint teaches it to keep player prose out of the scratchpad. Check `cleanup_kept` and review a sample
+of both turn types before uploading. Use `--opponent-reads` as well if the experiment calls for both forms of guidance.
+
 It keeps the same decisions as `build_dataset.py` (one `submit_action` call, under the token cap) and skips
 scratchpad turns and non-poker requests. Use the base deployment's id only: offline OPSD replays the base model's
 own tokens. `--since <UTC time>` limits it to recent requests.

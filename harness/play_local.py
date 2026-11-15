@@ -63,6 +63,7 @@ async def play(args: argparse.Namespace) -> dict:
                 rules,
                 model=args.model,
                 cleanup_complete=relay_completion(client, GATEWAY_URL, key, cleanup_params(mine)),
+                ignore_table_talk=args.ignore_table_talk,
             )
         ]
         for i in range(1, rules.seats):
@@ -89,6 +90,8 @@ def main() -> None:
     parser.add_argument("--model", required=True, help="your deployment, <project>/<name>")
     parser.add_argument("--opponents", choices=["house", "bots"], default="house")
     parser.add_argument("--opponent-model", default=HOUSE_MODEL, help="model for the other seats with --opponents house")
+    parser.add_argument("--ignore-table-talk", action="store_true",
+                        help="hide opponent chatter from the evaluated seat in this local game")
     parser.add_argument("--hands", type=int, help="hands in the game (default: the event's 30)")
     parser.add_argument("--seed", type=int)
     parser.add_argument("--out", type=Path, default=Path("runs"))

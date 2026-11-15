@@ -8,10 +8,9 @@ without waiting for an eval job.
     uv run python opsd/build_from_gateway.py --deployment-id infer_xxx --dataset pokerbots-opsd-tight            # dry run
     uv run python opsd/build_from_gateway.py --deployment-id infer_xxx --dataset pokerbots-opsd-tight --upload
 
-Only event-rules poker decisions are kept: the prompt must start with the harness's system prompt, and the reply
-must be exactly one `submit_action` call under the token cap (the same rule as `build_dataset.py`). The after-hand
-`update_scratchpad` turns and anything else sent to the deployment (probes, tests) are skipped. Use traces of the
-base model only: offline OPSD replays the base model's own tokens.
+Poker turns must start with the harness's poker system prompt. The default keeps single action calls below the
+token cap. `--table-talk-defense` and `--opponent-reads` also keep clean scratchpad turns. Use traces of the
+base model only because offline OPSD replays its generated tokens.
 """
 
 from __future__ import annotations
@@ -25,8 +24,7 @@ from pathlib import Path
 from ac2.sdk import Client
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from build_dataset import decision_tasks  # noqa: E402
-from hint import HINT  # noqa: E402
+from build_dataset import decision_tasks, teacher_hints  # noqa: E402
 
 SYSTEM_PROMPT_START = "You are a professional poker player in a six-seat no-limit Texas Hold'em game"
 PAGE = 200
@@ -67,7 +65,11 @@ def is_poker_prompt(row: dict) -> bool:
         first = json.loads(row["input"])[0]
     except (TypeError, ValueError, IndexError, KeyError):
         return False
-    return first.get("role") == "system" and str(first.get("content", "")).startswith(SYSTEM_PROMPT_START)
+    return (
+        isinstance(first, dict)
+        and first.get("role") == "system"
+        and str(first.get("content", "")).startswith(SYSTEM_PROMPT_START)
+    )
 
 
 def as_trace(row: dict) -> dict:
@@ -87,8 +89,12 @@ def as_trace(row: dict) -> dict:
     }
 
 
-def build(rows: list[dict], hint: str, max_tokens: int) -> tuple[list, dict[str, int]]:
+def build(
+    rows: list[dict], hint: str, max_tokens: int, *, cleanup_hint: str | None = None, cleanup_max_tokens: int = 10_000,
+) -> tuple[list, dict[str, int]]:
     totals = {"spans": len(rows), "not_poker": 0, "decisions": 0, "kept": 0, "cleanup": 0, "format": 0, "truncated": 0}
+    if cleanup_hint is not None:
+        totals["cleanup_kept"] = 0
     tasks = []
     seen: set[str] = set()
     for row in rows:
@@ -100,13 +106,15 @@ def build(rows: list[dict], hint: str, max_tokens: int) -> tuple[list, dict[str,
             totals["not_poker"] += 1
             continue
         try:
-            built, stats = decision_tasks(as_trace(row), hint, max_tokens)
+            built, stats = decision_tasks(
+                as_trace(row), hint, max_tokens, cleanup_hint=cleanup_hint, cleanup_max_tokens=cleanup_max_tokens,
+            )
         except ValueError:  # a span whose items don't validate
             totals["format"] += 1
             continue
         tasks.extend(built)
-        for name in ("decisions", "kept", "cleanup", "format", "truncated"):
-            totals[name] += stats[name]
+        for name, count in stats.items():
+            totals[name] += count
     return tasks, totals
 
 
@@ -117,12 +125,19 @@ def main() -> None:
     parser.add_argument("--dataset", required=True)
     parser.add_argument("--since", help="only spans from this ISO time on (UTC), e.g. 2026-11-14T22:30:00")
     parser.add_argument("--max-tokens", type=int, default=5_000, help="replies this long count as truncated")
+    parser.add_argument("--cleanup-max-tokens", type=int, default=10_000, help="output cap for scratchpad updates")
+    parser.add_argument("--opponent-reads", action="store_true", help="include clean cleanup turns and seat-read guidance")
+    parser.add_argument("--table-talk-defense", action="store_true",
+                        help="teach the model to ignore chatter when acting and updating notes")
     parser.add_argument("--upload", action="store_true", help="create the dataset on AC2 (default: print only)")
     args = parser.parse_args()
+    if args.max_tokens < 1 or args.cleanup_max_tokens < 1:
+        parser.error("token caps must be positive")
 
     client = Client(project=args.project)
     rows = fetch_spans(client, args.deployment_id, args.project, args.since)
-    tasks, totals = build(rows, HINT, args.max_tokens)
+    hint, cleanup_hint = teacher_hints(args.opponent_reads, args.table_talk_defense)
+    tasks, totals = build(rows, hint, args.max_tokens, cleanup_hint=cleanup_hint, cleanup_max_tokens=args.cleanup_max_tokens)
     random.Random(0).shuffle(tasks)
     print(json.dumps(totals | {"tasks": len(tasks)}))
     if not args.upload or not tasks:

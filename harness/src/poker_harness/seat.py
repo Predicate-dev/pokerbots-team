@@ -103,6 +103,7 @@ class ModelSeat:
     timeout_seconds: float | None = None
     cleanup_complete: Complete | None = None  # the after-hand turn's caller (its own token cap); default `complete`
     persona: str = ""  # training-only: text appended to this seat's system prompt (`env_params.opponent_seats`)
+    ignore_table_talk: bool = False  # opt-in for a seat on a locally hosted table
     turn: int = field(default=0, init=False)
     messages: list[Message] = field(default_factory=list, init=False)
     _hand: int | None = field(default=None, init=False)
@@ -154,11 +155,15 @@ class ModelSeat:
         prompt = system_prompt(self.rules)
         return f"{prompt}\n\n{self.persona}" if self.persona else prompt
 
+    @property
+    def _show_table_talk(self) -> bool:
+        return self.rules.table_talk and not self.ignore_table_talk
+
     def _next_messages(self, ctx: DecisionContext) -> list[Message]:
         """Start the hand's conversation, or answer the last call and add what happened since."""
         if ctx.hand_number != self._hand:
             self._open_hand(ctx.hand_number)
-            prompt = decision_prompt(ctx, self.rules.table_talk)
+            prompt = decision_prompt(ctx, self._show_table_talk)
             if self._recaps:  # what this seat missed since its last action (see `hand_over`), oldest first
                 prompt, self._recaps = "\n\n".join([*self._recaps, prompt]), []
             self.messages.append({"role": "user", "content": prompt})
@@ -169,7 +174,7 @@ class ModelSeat:
             submitted = any(_tool_name(c) == SUBMIT_ACTION for c in self._pending_calls)
             applied = self._answer_calls(own)
             note = "" if submitted else f"Your last turn made no usable submit_action call. {applied}"
-            prompt = update_prompt(ctx, others, note, self.rules.table_talk)
+            prompt = update_prompt(ctx, others, note, self._show_table_talk)
             if self.messages[-1]["role"] == "user":  # the last call failed outright; fold its turn into this one
                 self.messages[-1] = {"role": "user", "content": f"{self.messages[-1]['content']}\n\n{prompt}"}
             else:
@@ -255,7 +260,7 @@ class ModelSeat:
         else:
             own = actions[self._seen] if self._seen < len(actions) else None
             since = actions[self._seen + 1 :] if own and own["player"] == self.name else actions[self._seen :]
-        self._recaps.append("\n".join(hand_over_lines(summary, self.name, since, fresh, self.rules.table_talk)))
+        self._recaps.append("\n".join(hand_over_lines(summary, self.name, since, fresh, self._show_table_talk)))
 
     def _update(self, reply: Completion, error: str | None) -> dict[str, Any]:
         """One cleanup reply judged: "ok", "too_long" (with contents), "malformed", "none", "cut" or "error"."""
@@ -324,7 +329,7 @@ class ModelSeat:
             since = actions[self._seen + 1 :] if own else actions[self._seen :]
         self._pending_calls = []
         limit = self.rules.scratchpad_chars
-        prompt = cleanup_prompt(summary, self.name, since, fresh, self.rules.table_talk, limit)
+        prompt = cleanup_prompt(summary, self.name, since, fresh, self._show_table_talk, limit)
         first_private = len(self.messages)
         self.messages.append({"role": "user", "content": prompt})
         reply, error = await self._cleanup_reply()

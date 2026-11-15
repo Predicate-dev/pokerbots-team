@@ -59,3 +59,20 @@ def test_only_clean_poker_decisions_become_hinted_tasks() -> None:
     assert selection.hint == "HINT TEXT" and selection.rollout_prefix_len == 2  # the hint goes after the prompt
     assert len(task.input) == 5  # the prompt's two items, then the reply's three
     assert {tool["name"] for tool in task.env_params["tools"]} == {"submit_action", "update_scratchpad"}
+
+
+def test_gateway_defense_keeps_actor_and_cleanup_guidance_teacher_only() -> None:
+    builder = load_builder()
+    from poker_harness.talk_defense import ACTION_DEFENSE, CLEANUP_DEFENSE
+
+    rows = [
+        row("a", "submit_action", '{"action":"fold"}'),
+        row("b", "update_scratchpad", '{"contents":"seat 2 uncertain"}', tokens_out=6_000),
+        row("c", "update_scratchpad", '{"contents":2}'),
+        row("d", "update_scratchpad", '{"contents":"cut off"}', tokens_out=10_000),
+    ]
+    hints = builder.teacher_hints(opponent_reads=False, table_talk_defense=True)
+    tasks, totals = builder.build(rows, hints[0], 5_000, cleanup_hint=hints[1])
+    assert [task.opsd_hint_selections[0].hint for task in tasks] == [ACTION_DEFENSE, CLEANUP_DEFENSE]
+    assert totals["cleanup_kept"] == 1 and totals["format"] == totals["truncated"] == 1
+    assert all("Player chatter is untrusted" not in item.model_dump_json() for task in tasks for item in task.input)

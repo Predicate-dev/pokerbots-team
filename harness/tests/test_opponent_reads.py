@@ -5,11 +5,13 @@ import sys
 from pathlib import Path
 
 import httpx
+import pytest
 from fastapi import FastAPI, Request
 from poker_harness.completions import table_rules, with_preset
 from poker_harness.game import play_session
 from poker_harness.house_bots import HOUSE_STYLES, HouseStylePlayer
 from poker_harness.opponent_reads import ACTION_GUIDANCE, CLEANUP_GUIDANCE, PLACEMENT_GUIDANCE
+from poker_harness.talk_defense import ACTION_DEFENSE, CLEANUP_DEFENSE
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import score_local  # noqa: E402
@@ -29,7 +31,8 @@ async def test_talk_modes_keep_the_same_betting_policy() -> None:
     assert [a["say"] for a in actions["shuffled"]] != [a["say"] for a in actions["normal"]]
 
 
-def test_ablation_plays_paired_games_and_keeps_logs_separate(monkeypatch, tmp_path, capsys) -> None:
+@pytest.mark.parametrize("arm", ["opponent_reads", "table_talk_defense"])
+def test_ablation_plays_paired_games_and_keeps_logs_separate(monkeypatch, tmp_path, capsys, arm: str) -> None:
     app = FastAPI()
     systems = set()
 
@@ -51,18 +54,23 @@ def test_ablation_plays_paired_games_and_keeps_logs_separate(monkeypatch, tmp_pa
     monkeypatch.setattr(score_local.httpx, "AsyncClient", local_client)
     monkeypatch.setattr(score_local, "GATEWAY_URL", "http://gw/v1")
     monkeypatch.setenv("AC2_API_KEY", "test-key")
+    flag = "--opponent-read-ablation" if arm == "opponent_reads" else "--table-talk-defense-ablation"
     monkeypatch.setattr(
         sys, "argv",
         ["score_local.py", "--model", "p/entry", "--games", "1", "--hands", "3", "--seed", "13", "--lineup", "mixed",
-         "--talk-mode", "muted", "--out", str(tmp_path), "--opponent-read-ablation"],
+         "--talk-mode", "shuffled", "--out", str(tmp_path), flag],
     )
     score_local.main()
 
     control = json.loads((tmp_path / "control" / "score-13.json").read_text())
-    treatment = json.loads((tmp_path / "opponent_reads" / "score-13.json").read_text())
+    treatment = json.loads((tmp_path / arm / "score-13.json").read_text())
     assert control["lineup"] == treatment["lineup"] and control["scored_seat"] == treatment["scored_seat"]
-    assert len(systems) == 2 and all(PLACEMENT_GUIDANCE in system for system in systems)
-    assert sum(ACTION_GUIDANCE in system and CLEANUP_GUIDANCE in system for system in systems) == 1
+    assert len(systems) == 2
+    if arm == "opponent_reads":
+        assert all(PLACEMENT_GUIDANCE in system for system in systems)
+        assert sum(ACTION_GUIDANCE in system and CLEANUP_GUIDANCE in system for system in systems) == 1
+    else:
+        assert sum(ACTION_DEFENSE in system and CLEANUP_DEFENSE in system for system in systems) == 1
     assert score_local.summarize(treatment)["cleanup_updated"] >= 1
     paired = json.loads(capsys.readouterr().out.splitlines()[-1])
     assert paired["paired_games"] == 1 and paired["mean_places_gained"] == 0 and paired["tied"] == 1

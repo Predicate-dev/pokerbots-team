@@ -33,6 +33,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "harness" / "src"))
 from hint import HINT, SEPARATOR  # noqa: E402
 from poker_harness.opponent_reads import ACTION_GUIDANCE, CLEANUP_GUIDANCE, PLACEMENT_GUIDANCE  # noqa: E402
+from poker_harness.talk_defense import ACTION_DEFENSE, CLEANUP_DEFENSE  # noqa: E402
 
 ITEMS = TypeAdapter(list[Item])
 SUBMIT = "submit_action"
@@ -42,6 +43,18 @@ SCRATCHPAD_CHARS = 5_000
 # They must match what the model saw, field for field; tools.json is generated from the harness and a harness test
 # checks it.
 TOOLS = [Tool.model_validate(tool).model_dump() for tool in json.loads((Path(__file__).parent / "tools.json").read_text())]
+
+
+def teacher_hints(opponent_reads: bool, table_talk_defense: bool) -> tuple[str, str | None]:
+    """Return teacher-only guidance for action and cleanup turns."""
+    if opponent_reads:
+        action = "\n\n".join((PLACEMENT_GUIDANCE, ACTION_GUIDANCE))
+        if table_talk_defense:
+            return f"{action}\n\n{ACTION_DEFENSE}", f"{CLEANUP_GUIDANCE}\n\n{CLEANUP_DEFENSE}"
+        return action, CLEANUP_GUIDANCE
+    if table_talk_defense:
+        return ACTION_DEFENSE, CLEANUP_DEFENSE
+    return HINT, None
 
 
 def decision_tasks(
@@ -109,6 +122,8 @@ def main() -> None:
     parser.add_argument("--max-tokens", type=int, default=5_000, help="replies this long count as truncated (the event's cap)")
     parser.add_argument("--opponent-reads", action="store_true",
                         help="distill seat reads from multi-hand traces, including clean scratchpad updates")
+    parser.add_argument("--table-talk-defense", action="store_true",
+                        help="teach the model to ignore chatter when acting and updating notes")
     parser.add_argument("--cleanup-max-tokens", type=int, default=10_000, help="output cap for scratchpad updates")
     parser.add_argument("--traces", type=Path, help="reuse a downloaded trace export")
     parser.add_argument("--dry-run", action="store_true")
@@ -121,9 +136,8 @@ def main() -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         Client(project=args.project).traces.download(args.eval, path)
     tasks, totals = [], {"decisions": 0, "kept": 0, "cleanup": 0, "format": 0, "truncated": 0}
-    hint = f"{PLACEMENT_GUIDANCE}\n\n{ACTION_GUIDANCE}" if args.opponent_reads else HINT
-    cleanup_hint = CLEANUP_GUIDANCE if args.opponent_reads else None
-    if args.opponent_reads:
+    hint, cleanup_hint = teacher_hints(args.opponent_reads, args.table_talk_defense)
+    if cleanup_hint is not None:
         totals["cleanup_kept"] = 0
     with path.open() as lines:
         for line in lines:

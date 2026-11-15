@@ -28,6 +28,7 @@ from poker_harness.house_bots import HOUSE_STYLES, TALK_MODES, HouseStylePlayer
 from poker_harness.opponent_reads import ACTION_GUIDANCE, CLEANUP_GUIDANCE, PLACEMENT_GUIDANCE
 from poker_harness.prompts import talk_fields
 from poker_harness.seat import ModelSeat
+from poker_harness.talk_defense import ACTION_DEFENSE, CLEANUP_DEFENSE
 
 
 async def one_game(
@@ -119,7 +120,9 @@ async def run(args: argparse.Namespace) -> list[dict]:
             "control": PLACEMENT_GUIDANCE,
             "opponent_reads": "\n\n".join((PLACEMENT_GUIDANCE, ACTION_GUIDANCE, CLEANUP_GUIDANCE)),
         }
-    folders = {arm: args.out / arm if args.opponent_read_ablation else args.out for arm in arms}
+    elif args.table_talk_defense_ablation:
+        arms = {"control": "", "table_talk_defense": f"{ACTION_DEFENSE}\n\n{CLEANUP_DEFENSE}"}
+    folders = {arm: args.out / arm if len(arms) > 1 else args.out for arm in arms}
     for folder in folders.values():
         folder.mkdir(parents=True, exist_ok=True)
     async with httpx.AsyncClient(timeout=httpx.Timeout(600.0, connect=30.0)) as client:
@@ -139,9 +142,9 @@ async def run(args: argparse.Namespace) -> list[dict]:
         return list(await asyncio.gather(*(guarded(seed, arm, hint) for seed in seeds for arm, hint in arms.items())))
 
 
-def compare_arms(rows: list[dict]) -> dict:
+def compare_arms(rows: list[dict], treatment_arm: str = "opponent_reads") -> dict:
     control = {row["seed"]: row for row in rows if row["arm"] == "control"}
-    treatment = {row["seed"]: row for row in rows if row["arm"] == "opponent_reads"}
+    treatment = {row["seed"]: row for row in rows if row["arm"] == treatment_arm}
     shared = sorted(control.keys() & treatment.keys())
     changes = [control[seed]["place"] - treatment[seed]["place"] for seed in shared]
     return {
@@ -173,8 +176,11 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=20261114, help="first seed; the same seeds give the same deals")
     parser.add_argument("--hands", type=int, help="hands per game (default: the event's 30)")
     parser.add_argument("--out", type=Path, default=Path("runs/score"))
-    parser.add_argument("--opponent-read-ablation", action="store_true",
-                        help="run two arms per seed with the same placement guidance, adding seat reads to one arm")
+    ablations = parser.add_mutually_exclusive_group()
+    ablations.add_argument("--opponent-read-ablation", action="store_true",
+                           help="run two arms per seed with the same placement guidance, adding seat reads to one arm")
+    ablations.add_argument("--table-talk-defense-ablation", action="store_true",
+                           help="compare the official prompt with extra instructions to ignore chatter")
     parser.add_argument("--talk-mode", choices=TALK_MODES, default="normal", help="scripted opponents' table talk")
     parser.add_argument("--lineup", choices=("house", "mixed"), default="house",
                         help="mixed replaces two house imitations with generic scripted opponents")
@@ -188,6 +194,8 @@ def main() -> None:
         print_summary(f"{args.model} ({arm})", [row for row in rows if row["arm"] == arm])
     if args.opponent_read_ablation:
         print(json.dumps(compare_arms(rows)))
+    elif args.table_talk_defense_ablation:
+        print(json.dumps(compare_arms(rows, "table_talk_defense")))
 
 
 if __name__ == "__main__":

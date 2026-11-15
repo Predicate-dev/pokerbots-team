@@ -18,7 +18,7 @@ def _call(name: str, arguments: dict, i: int) -> dict:
     return {"id": f"{name}-{i}", "type": "function", "function": {"name": name, "arguments": json.dumps(arguments)}}
 
 
-async def _play(seed: int, overrides: dict) -> tuple[dict, list[dict]]:
+async def _play(seed: int, overrides: dict, *, ignore_for: str | None = None) -> tuple[dict, list[dict]]:
     """A game where every action says a unique tag; returns the log and every model call with what it newly showed."""
     rng = random.Random(seed)
     rules = table_rules(with_preset({"preset": "event", "seed": seed, "total_hands": 8, **overrides}))
@@ -52,7 +52,10 @@ async def _play(seed: int, overrides: dict) -> tuple[dict, list[dict]]:
 
         return complete
 
-    players = [ModelSeat(f"seat{i}", bot(f"seat{i}"), rules) for i in range(SEATS)]
+    players = [
+        ModelSeat(name, bot(name), rules, ignore_table_talk=name == ignore_for)
+        for name in (f"seat{i}" for i in range(SEATS))
+    ]
     return await play_session(f"g{seed}", seed, players, rules), calls
 
 
@@ -83,3 +86,18 @@ async def test_single_hand_talk_tables_are_unchanged() -> None:
     """One-hand tasks (the 6max-event datasets) have no next hand, so no recap and no extra log keys."""
     log, _ = await _play(3, {"scratchpad": False, "ranking": None, "reset_stacks": True, "total_hands": 1})
     assert "pot_won" not in log["hands"][0] and "eliminated" not in log["hands"][0]
+
+
+@pytest.mark.parametrize("scratchpad", [True, False])
+async def test_local_protection_hides_chatter_but_keeps_every_action(scratchpad: bool) -> None:
+    rules = {"scratchpad": scratchpad}
+    _, original = await _play(1, rules)
+    protected_log, protected = await _play(1, rules, ignore_for="seat0")
+    assert len(protected_log["hands"]) > 1
+    assert any(call["seat"] == "seat0" and 'says: "' in call["shown"] for call in original)
+    assert len(original) == len(protected)
+    for before, after in zip(original, protected, strict=True):
+        if before["seat"] == "seat0":
+            assert after["shown"] == re.sub(r' and says: "hey tag\d+x!"', "", before["shown"])
+        else:
+            assert after == before

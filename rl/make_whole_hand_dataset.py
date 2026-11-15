@@ -50,6 +50,9 @@ def main() -> None:
     parser.add_argument("--field-model", required=True, help="deployment for the model opponents, <project>/<name>")
     parser.add_argument("--house-share", type=float, default=0.2, help="share of opponent seats played by a scripted house bot")
     parser.add_argument("--other-share", type=float, default=0.15, help="share of unplayable hands to keep")
+    parser.add_argument("--placement-scale", type=float, default=25.0,
+                        help="reward points per unit of finishing-place value. The harness default of 5 leaves most hands "
+                        "within 0.05 of the neutral score; 25 gives rewards about the spread of the call puzzles")
     parser.add_argument("--dump", type=Path, help="also write every task's settings to this file, to check them locally")
     parser.add_argument("--upload", action="store_true")
     args = parser.parse_args()
@@ -91,6 +94,7 @@ def main() -> None:
             }
             if env["first_hand"] > 1:
                 env["starting_scratchpad"] = notes
+            task.grader_params["placement_scale"] = args.placement_scale
             stats["tasks with notes"] += env["first_hand"] > 1
             stats["scripted opponent seats"] += sum(isinstance(v, str) for v in env["opponent_seats"].values())
     for name, tasks in built.items():

@@ -49,6 +49,7 @@ from .grading import GradingError, bounded, check_grader_params, failure_score, 
 from .house_bots import TALK_MODES
 from .labels import label_folds
 from .ledger import from_params as ledger_from_params
+from .puzzle_tasks import check_puzzle, grade_puzzle, play_puzzle
 from .ledger import render as render_ledger
 from .prompts import TableRules, talk_fields
 from .seat import ModelSeat
@@ -250,6 +251,21 @@ def create_app(
             check_grader_params(request.task.grader_params)
             seats = int(params.get("seats", 10))
             policy = {int(i) for i in params.get("policy_seats", range(seats))}
+            if params.get("puzzle"):  # one real decision, graded from the cards (`puzzle_tasks.py`)
+                puzzle = check_puzzle(params["puzzle"], seats)
+                async with httpx.AsyncClient(timeout=timeout, transport=relay_transport) as relay_client:
+                    rollout.policy_seats = [f"seat{int(puzzle['seat'])}"]
+                    rollout.log = await play_puzzle(
+                        rollout.id, int(params["seed"]), puzzle, rollout.rules,
+                        relay_completion(relay_client, request.ac_api_url, request.ac_api_key, params),
+                        float(params.get("decision_timeout_seconds", DEFAULT_DECISION_TIMEOUT_SECONDS)),
+                    )
+                job = re.search(r"/(job_[0-9a-f]+)/", request.ac_api_url)
+                rollout.log["relay_job_id"] = job[1] if job else None
+                runs.mkdir(parents=True, exist_ok=True)
+                (runs / f"{rollout.id}.json").write_text(json.dumps(rollout.log, indent=1))
+                rollout.status = "completed"
+                return
             # Training-only setups (`training.py`): both are empty for a task that sets none of their keys.
             start = table_start(params, rollout.rules, policy)
             specs = opponent_specs(params, seats, policy)
@@ -427,6 +443,8 @@ def create_app(
                     await asyncio.shield(rollout.task)
                 if rollout.status != "completed" or not rollout.log:
                     grading.score = failure_score(f"The table ended {rollout.status}: {rollout.error}")
+                elif rollout.log.get("puzzle_result"):
+                    grading.score = grade_puzzle(rollout.log)
                 else:
                     grading.score = bounded(grade_log(rollout.log, rollout.policy_seats, params))
             grading.status = "completed"

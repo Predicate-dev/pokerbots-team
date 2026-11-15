@@ -9,7 +9,7 @@
 
 What `run` starts, all at the same time:
 
-- calls with notes  held-out call decisions with the notes block already in the scratchpad (`opsd/price_run.py`)
+- calls with notes  held-out call decisions with the notes block, prior opponent actions, or both in the scratchpad
 - calls, empty      the same decisions with an empty scratchpad, which is every game's first hand
 - opens             held-out first-in raise-or-fold decisions against the open card (`--decision open`)
 - notes             short real games: are the notes written after hand 1 and kept word for word (`checklist_check.py`)
@@ -77,17 +77,20 @@ async def run(args: argparse.Namespace) -> None:
     here = Path(__file__).resolve().parent
     python = sys.executable
     notes = str(args.notes_file.resolve()) if args.notes_file else None
+    opponent_replays = str(args.opponent_replays.resolve()) if args.opponent_replays else None
+    notes_args = ["--notes-file", notes] if notes else []
+    if opponent_replays:
+        notes_args.extend(("--opponent-replays", opponent_replays))
     spots, open_spots = str(args.spots.resolve()), args.open_spots.resolve()
     price = [python, str(ROOT / "opsd" / "price_run.py"), "--model", args.model, "--held-out", "--parallel", str(args.parallel)]
     jobs: dict[str, list[str]] = {}
     if "calls" not in args.skip:
         jobs["calls, empty notes"] = [*price, "--spots", spots, "--out", str(out / "calls_empty.jsonl")]
-        if notes:
-            jobs["calls with notes"] = [*price, "--spots", spots, "--notes-file", notes, "--out", str(out / "calls_notes.jsonl")]
+        if notes_args:
+            jobs["calls with notes"] = [*price, "--spots", spots, *notes_args, "--out", str(out / "calls_notes.jsonl")]
     if "opens" not in args.skip and open_spots.exists():
         jobs["opens"] = [*price, "--decision", "open", "--spots", str(open_spots), "--limit", str(args.open_limit),
-                         "--out", str(out / "opens.jsonl"),
-                         *(["--notes-file", notes] if notes else [])]
+                         "--out", str(out / "opens.jsonl"), *notes_args]
     if "notes" not in args.skip and notes:
         jobs["notes"] = [python, "checklist_check.py", "--model", args.model, "--games", "4", "--hands", "10",
                          "--notes-file", notes, "--out", str(out / "notes_games")]
@@ -98,7 +101,8 @@ async def run(args: argparse.Namespace) -> None:
                            if args.arena_replays else []),
                          "--games", str(args.games), "--seed", str(args.seed),
                          "--parallel", str(args.game_parallel), "--out", str(out / "games")]
-    (out / "meta.json").write_text(json.dumps({"model": args.model, "notes_file": notes, "field_model": args.field_model,
+    (out / "meta.json").write_text(json.dumps({"model": args.model, "notes_file": notes, "opponent_replays": opponent_replays,
+                                               "field_model": args.field_model,
                                                "games": args.games, "seed": args.seed, "jobs": list(jobs)}, indent=1))
     print(f"{args.model}: {len(jobs)} tests started at once; results in {out}", flush=True)
     results = await asyncio.gather(*(start(label, command, out / f"{label.replace(', ', '_').replace(' ', '_')}.log", here)
@@ -287,6 +291,7 @@ def main() -> None:
     r.add_argument("--model", required=True)
     r.add_argument("--name", required=True, help="results folder under runs/suite/")
     r.add_argument("--notes-file", type=Path, help="the block this model keeps at the top of its scratchpad")
+    r.add_argument("--opponent-replays", type=Path, help="source replays for prior betting counts on call and opening tests")
     r.add_argument("--spots", type=Path, default=Path("runs/price_spots_v2.jsonl"))
     r.add_argument("--open-spots", type=Path, default=Path("runs/open_spots.jsonl"))
     r.add_argument("--open-limit", type=int, default=600, help="how many held-out opening decisions to ask")

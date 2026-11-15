@@ -61,8 +61,8 @@ KEEP_PLAYBOOK = ("The CALL CHECKLIST and PLAYBOOK blocks stay at the top of my n
                  "my notes for this hand.")
 LIMIT = 5_000
 BIG_SHARE = 0.4  # a call for this share of the stack or more is a "big call"
-NO_NOTES_RULE = ("Hand 1, no notes yet. Facing an all-in or a call for most of my stack before the flop, I continue only with "
-                 "QQ, KK, AA or ace-king. Busting first is the worst result, so everything else folds.")
+NO_NOTES_RULE = ("My scratchpad is empty. Estimate the opponent's range from position and betting. Compare the call "
+                 "price and the effect of winning or losing on my finishing place.")
 REPLACED = ""  # an earlier wording of the block that generated replies were shown (`--generated-with`)
 DROPPED_LINE_USE = re.compile(r"subtract 20|show me|oh no, sorry|never bets without|\b(?:rule|playbook) [DE]\b|\b[DE]\)", re.IGNORECASE)
 # a call decision is a training target only if its reply works from the checklist, not merely agrees with it
@@ -155,7 +155,8 @@ def notes_task(row: dict, block: str, show_block: bool, max_tokens: int) -> Task
     return close(prompt, reply, call, "Scratchpad updated.", f"checklist:notes:{kind}")
 
 
-def decision_task(row: dict, block: str, held_out: set, max_tokens: int, need_block: bool) -> tuple[Task | None, str]:
+def decision_task(row: dict, block: str, held_out: set, max_tokens: int, need_block: bool,
+                  extra_pools: set[str] | None = None) -> tuple[Task | None, str]:
     """A decision with the blocks in the scratchpad it was shown; (task, kind or why it was dropped).
 
     Kinds: call:fold / call:continue (a clear price-card plan, followed), open:raise / open:fold (a clear open-card
@@ -207,12 +208,13 @@ def decision_task(row: dict, block: str, held_out: set, max_tokens: int, need_bl
         big = c["share"] >= BIG_SHARE and kind != "other"
         strong = (spot["street"] != "preflop" and kind == "call:continue"
                   and postflop_class(spot["hole"], spot["board"]) in ("monster", "trips", "two_pair", "overpair"))
-        if not need_block and strong:  # the model folds its own straights and flushes too often: every correct continue is a target
+        big_kind = "big fold" if answer == "fold" else "big continue"
+        if strong and extra_pools and "strong continue" in extra_pools:
             kind = "strong continue"
-        elif not need_block and big:  # the calls that decide who busts: always targets, with or without notes
-            if "(empty)" in prompt[1]["content"] and spot["street"] == "preflop":
+        elif big and extra_pools and big_kind in extra_pools:
+            if spot["hand"] == 1 and spot["street"] == "preflop" and "(empty)" in prompt[1]["content"]:
                 lead_reasoning(reply, NO_NOTES_RULE)
-            kind = "big fold" if answer == "fold" else "big continue"
+            kind = big_kind
         elif not need_block and kind != "other":  # real play: only the first hand, where the notes are still empty
             premium_raise = (spot["street"] == "preflop" and action == "raise"
                              and preflop_class(spot["hole"]) in ("QQ+", "AK", "99-JJ", "AQ-AJ"))
@@ -277,7 +279,7 @@ def main() -> None:
     parser.add_argument("--big-folds", type=int, default=0, help="folds to a call for 40%+ of the stack that the card says to fold")
     parser.add_argument("--strong-continues", type=int, default=0,
                         help="continues after the flop with two pair or better or an overpair, when the card says continue")
-    parser.add_argument("--big-fold-copies", type=int, default=1, help="times each big fold appears")
+    parser.add_argument("--big-fold-copies", type=int, default=1, help="times each big fold or big continue appears")
     parser.add_argument("--big-continues", type=int, default=0, help="calls for 40%+ of the stack that the card says to make")
     parser.add_argument("--flop-bets", type=int, default=200, help="playbook rule B: flop bets after raising")
     parser.add_argument("--reraises", type=int, default=150, help="playbook rule D: re-raises of an open")
@@ -315,6 +317,10 @@ def main() -> None:
     first, later = [], []
     pools: dict[str, list[Task]] = {"other": [], "open:raise": [], "open:fold": [], "premium": [], "first-hand call": [],
                                     "flop bet": [], "reraise": [], "reraise answer": [], "big fold": [], "big continue": [], "strong continue": []}
+    caps = {"other": args.other_decisions, "open:raise": args.open_raises, "open:fold": args.open_folds, "premium": args.premium_raises,
+            "first-hand call": args.first_hand_calls, "flop bet": args.flop_bets, "reraise": args.reraises,
+            "reraise answer": args.reraise_answers, "big fold": args.big_folds, "big continue": args.big_continues, "strong continue": args.strong_continues}
+    extra_pools = {kind for kind in ("big fold", "big continue", "strong continue") if caps[kind] > 0}
     calls: dict[str, list[Task]] = {"call:fold": [], "call:continue": []}
     for row in policy:
         if '"update_scratchpad"' in (row.get("output") or ""):
@@ -323,16 +329,13 @@ def main() -> None:
             if task is not None:
                 (first if task.env_params["source"].endswith("first") else later).append(task)
         else:
-            task, kind = decision_task(row, block, held_out, args.max_tokens, need_block=False)
+            task, kind = decision_task(row, block, held_out, args.max_tokens, need_block=False, extra_pools=extra_pools)
             if task is None:
                 stats[f"ordinary decision dropped: {kind}"] += 1
             elif kind in pools:
                 pools[kind].append(task)
             elif kind in calls and not args.notes_deployment_id:
                 calls[kind].append(task)
-    caps = {"other": args.other_decisions, "open:raise": args.open_raises, "open:fold": args.open_folds, "premium": args.premium_raises,
-            "first-hand call": args.first_hand_calls, "flop bet": args.flop_bets, "reraise": args.reraises,
-            "reraise answer": args.reraise_answers, "big fold": args.big_folds, "big continue": args.big_continues, "strong continue": args.strong_continues}
     other = [task for kind, tasks in pools.items() for task in tasks[: caps[kind]]]
     other += (pools["big fold"][: caps["big fold"]] + pools["big continue"][: caps["big continue"]]) * (args.big_fold_copies - 1)  # the examples that stop busts, weighted up
     for kind, tasks in pools.items():

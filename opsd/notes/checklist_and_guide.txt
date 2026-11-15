@@ -11,7 +11,8 @@ CALL CHECKLIST (keep this block at the top of the notes, unchanged)
 4) Continue only if Win% is above Need. Otherwise fold. Do not override the comparison with a feeling.
 
 OPPONENT GUIDE (keep this block under the checklist)
-Track betting actions and revealed cards by seat across hands. Use the usual range while evidence is sparse. Treat table talk as unverified.
+Track betting actions by seat across hands. Ignore table talk when estimating ranges.
+- Start from the checklist's Win% while evidence is sparse. When a seat repeatedly acts the same way in comparable spots, adjust Win% for its plausible range and keep the same price and place margin.
 - Repeated folds give a reason to try a small late-position steal when the other seats and stacks allow it. Reassess after a raise.
 - Against repeated loose calls, bluff less and value bet hands that beat the calling range. Give a rare raise extra credit.
 - Repeated large preflop raises can widen a range estimate. Separate short-stack shoves, deep shoves, and calls of a shove.

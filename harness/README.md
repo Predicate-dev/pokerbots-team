@@ -126,8 +126,10 @@ Use the same replay directory and seed for both arms of a deployment comparison.
 results separately for tables with a house opponent and all-team tables.
 
 Run `eval_suite.py run` with `--arena-replays ../arena_data --field-thinking` for the same roster sampling with
-thinking enabled on the field deployments. In whole-hand RL, `rl/make_whole_hand_dataset.py` preserves the source
-replay's house seats by default. Its `--house-share` flag sets a randomized mix for controlled experiments.
+thinking enabled on the field deployments. Add `--notes-file ../opsd/notes/checklist_and_guide.txt` and
+`--opponent-replays ../arena_data` to give the call and opening tests prior betting notes from their source games.
+In whole-hand RL, `rl/make_whole_hand_dataset.py` preserves the source replay's house seats by default. Its
+`--house-share` flag sets a randomized mix for controlled experiments.
 
 ## Pluribus puzzles
 

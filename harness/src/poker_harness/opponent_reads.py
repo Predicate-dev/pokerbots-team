@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
+from collections.abc import Iterable
 
 PLACEMENT_GUIDANCE = """Play for finishing place. Consider hands remaining, effective stacks, whether you cover
 the opponent, and which players you can realistically pass. Favor low-cost edges. Before risking much of your stack,
@@ -41,17 +42,21 @@ def betting_evidence(messages: list[str], prior: str = "") -> str:
     hero = _HERO.search(text)
     if hero is None:
         return ""
-    hero = int(hero[1])
+    actions = ((street, int(seat), action, int(amount or 0)) for street, seat, action, amount in _BETTING.findall(text))
+    return _update_counts(int(hero[1]), actions, prior)
+
+
+def _update_counts(hero: int, actions: Iterable[tuple[str, int, str, int]], prior: str) -> str:
     totals = {}
     for record in _OBSERVATION.findall(prior):
         seat, played, seen, raises, big, calls, bets = map(int, record)
         if seat != hero and big <= raises <= played <= seen:
             totals[seat] = [played, seen, raises, big, calls, bets]
-    actions = defaultdict(list)
-    for street, seat, action, amount in _BETTING.findall(text):
-        if int(seat) != hero:
-            actions[int(seat)].append((street, action, int(amount or 0)))
-    for seat, moves in actions.items():
+    by_seat = defaultdict(list)
+    for street, seat, action, amount in actions:
+        if seat != hero:
+            by_seat[seat].append((street, action, amount))
+    for seat, moves in by_seat.items():
         pre = [(action, amount) for street, action, amount in moves if street == "preflop"]
         post = [action for street, action, _ in moves if street != "preflop"]
         increments = (
@@ -68,3 +73,31 @@ def betting_evidence(messages: list[str], prior: str = "") -> str:
         f"| postflop calls {calls} | postflop bets/raises {bets}"
         for seat, (played, seen, raises, big, calls, bets) in sorted(totals.items())
     )
+
+
+def replay_betting_evidence(match: dict, spots: Iterable[tuple[int, int]]) -> dict[tuple[int, int], str]:
+    """Reconstruct notes by (hand, hero seat) from the public actions in strictly earlier hands."""
+    targets = set(spots)
+    if not targets:
+        return {}
+    prior = dict.fromkeys((seat for _, seat in targets), "")
+    last = max(hand for hand, _ in targets)
+    hands = {hand["hand_number"]: hand for hand in match["hands"]}
+    notes = {}
+    for number in range(1, last + 1):
+        if number not in hands:
+            raise ValueError(f"{match['id']}: missing hand {number} for opponent notes")
+        for seat, counters in prior.items():
+            if (number, seat) in targets:
+                notes[number, seat] = counters
+        if number == last:
+            break
+        actions = [
+            (move["street"], move["seat"], move["action"], int(move.get("amount") or 0))
+            for move in hands[number]["actions"]
+            if move["street"] in ("preflop", "flop", "turn", "river")
+            and move["action"] in ("fold", "check", "call", "bet", "raise")
+            and move["seat"] in range(6)
+        ]
+        prior = {seat: _update_counts(seat, actions, counters) for seat, counters in prior.items()}
+    return notes

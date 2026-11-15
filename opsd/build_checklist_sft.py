@@ -51,6 +51,9 @@ KEEP_BOTH = ("The CALL CHECKLIST and OPPONENT GUIDE blocks stay at the top of my
 KEEP_PLAYBOOK = ("The CALL CHECKLIST and PLAYBOOK blocks stay at the top of my notes, word for word. Below them I write "
                  "my notes for this hand.")
 LIMIT = 5_000
+BIG_SHARE = 0.4  # a call for this share of the stack or more is a "big call"
+NO_NOTES_RULE = ("Hand 1, no notes yet. Facing an all-in or a call for most of my stack before the flop, I continue only with "
+                 "QQ, KK, AA or ace-king. Busting first is the worst result, so everything else folds.")
 REPLACED = ""  # an earlier wording of the block that generated replies were shown (`--generated-with`)
 DROPPED_LINE_USE = re.compile(r"subtract 20|show me|oh no, sorry|never bets without|\b(?:rule|playbook) [DE]\b|\b[DE]\)", re.IGNORECASE)
 # a call decision is a training target only if its reply works from the checklist, not merely agrees with it
@@ -217,14 +220,23 @@ def decision_task(row: dict, block: str, held_out: set, max_tokens: int, need_bl
         kind = f"call:{answer}" if c["plan"] != "close" else "other"
         if need_block and kind != "other" and not USES_NOTES.search(json.dumps(reply)):
             return None, "does not work from the notes"
-        if not need_block and kind != "other":  # real play: only the first hand, where the notes are still empty
+        big = c["share"] >= BIG_SHARE and kind != "other"
+        strong = (spot["street"] != "preflop" and kind == "call:continue"
+                  and postflop_class(spot["hole"], spot["board"]) in ("monster", "trips", "two_pair", "overpair"))
+        if not need_block and strong:  # the model folds its own straights and flushes too often: every correct continue is a target
+            kind = "strong continue"
+        elif not need_block and big:  # the calls that decide who busts: always targets, with or without notes
+            if "(empty)" in prompt[1]["content"] and spot["street"] == "preflop":
+                lead_reasoning(reply, NO_NOTES_RULE)
+            kind = "big fold" if answer == "fold" else "big continue"
+        elif not need_block and kind != "other":  # real play: only the first hand, where the notes are still empty
             premium_raise = (spot["street"] == "preflop" and action == "raise"
                              and preflop_class(spot["hole"]) in ("QQ+", "AK", "99-JJ", "AQ-AJ"))
             if premium_raise:
                 kind = "other"  # becomes "premium" below
             elif spot["hand"] == 1 and "(empty)" in prompt[1]["content"]:
                 kind = "first-hand call"
-            elif playbook and "CALL CHECKLIST" in prompt[1]["content"] and USES_NOTES.search(json.dumps(reply)):
+            elif "CALL CHECKLIST" in prompt[1]["content"] and USES_NOTES.search(json.dumps(reply)):
                 pass  # the model already plays with the checklist: its own call decisions are targets
             else:
                 return None, "a call decision from real play after the first hand"
@@ -278,6 +290,11 @@ def main() -> None:
                         "(playbook runs) the call decisions come from the policy deployments' own play")
     parser.add_argument("--notes-since", help="notes spans from this ISO time on (UTC)")
     parser.add_argument("--call-decisions", type=int, default=300, help="call decisions of each answer, when taken from play")
+    parser.add_argument("--big-folds", type=int, default=0, help="folds to a call for 40%+ of the stack that the card says to fold")
+    parser.add_argument("--strong-continues", type=int, default=0,
+                        help="continues after the flop with two pair or better or an overpair, when the card says continue")
+    parser.add_argument("--big-fold-copies", type=int, default=1, help="times each big fold appears")
+    parser.add_argument("--big-continues", type=int, default=0, help="calls for 40%+ of the stack that the card says to make")
     parser.add_argument("--flop-bets", type=int, default=200, help="playbook rule B: flop bets after raising")
     parser.add_argument("--reraises", type=int, default=150, help="playbook rule D: re-raises of an open")
     parser.add_argument("--reraise-answers", type=int, default=100, help="playbook rule D: answers to a re-raise of our raise")
@@ -313,7 +330,7 @@ def main() -> None:
     rng.shuffle(policy)
     first, later = [], []
     pools: dict[str, list[Task]] = {"other": [], "open:raise": [], "open:fold": [], "premium": [], "first-hand call": [],
-                                    "flop bet": [], "reraise": [], "reraise answer": []}
+                                    "flop bet": [], "reraise": [], "reraise answer": [], "big fold": [], "big continue": [], "strong continue": []}
     calls: dict[str, list[Task]] = {"call:fold": [], "call:continue": []}
     for row in policy:
         if '"update_scratchpad"' in (row.get("output") or ""):
@@ -331,8 +348,9 @@ def main() -> None:
                 calls[kind].append(task)
     caps = {"other": args.other_decisions, "open:raise": args.open_raises, "open:fold": args.open_folds, "premium": args.premium_raises,
             "first-hand call": args.first_hand_calls, "flop bet": args.flop_bets, "reraise": args.reraises,
-            "reraise answer": args.reraise_answers}
+            "reraise answer": args.reraise_answers, "big fold": args.big_folds, "big continue": args.big_continues, "strong continue": args.strong_continues}
     other = [task for kind, tasks in pools.items() for task in tasks[: caps[kind]]]
+    other += (pools["big fold"][: caps["big fold"]] + pools["big continue"][: caps["big continue"]]) * (args.big_fold_copies - 1)  # the examples that stop busts, weighted up
     for kind, tasks in pools.items():
         stats[f"kept {kind}"] = min(len(tasks), caps[kind])
     notes_turns = first + later[: max(0, args.notes_turns - len(first))]

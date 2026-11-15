@@ -44,13 +44,23 @@ def items(messages: list[dict]) -> list[dict]:
     return out
 
 
+APPLIED = "Applied: {move}."
+
+
+def _move(example: dict) -> str:
+    action = example["action"]
+    return action["action"] + (f" to {action['amount']}" if "amount" in action else "")
+
+
 def brief_reason(example: dict) -> str:
     """One factual line of thinking for the target. Qwen is served with thinking on, and a target with no thinking
     at all teaches it to write the tool call inside the thinking block, where the server never parses it (measured
     on the first run: every reply had no tool call). A short line keeps the block and then closes it."""
     action = example["action"]
     move = action["action"] + (f" to {action['amount']}" if "amount" in action else "")
-    return f"{example['street'].capitalize()} with {' '.join(example['hole'])}: {move}."
+    # The cards are left out on purpose: a first version named them here, and the model then wrote lines like
+    # "raise with qh js preflop." into its table talk, telling the table its hand.
+    return f"{example['street'].capitalize()}: {move}."
 
 
 RANKS = "23456789TJQKA"
@@ -74,12 +84,34 @@ def talk_line(example: dict, rng: random.Random) -> str:
     return rng.choice(WEAK_CLAIMS if premium(example["hole"]) else STRONG_CLAIMS)
 
 
+def cleanup_task(example: dict, index: int) -> Task:
+    """An after-hand turn: the conversation up to the cleanup prompt, then one `update_scratchpad` call that writes
+    the seat ledger with this hand added (`harness/clone_from_replays.py --ledger`)."""
+    conversation = items(example["messages"]) + [
+        {"type": "reasoning", "content": f"Hand {example['hand']} is over. Add its actions to each seat's counters, "
+                                         "update the stacks and reads, and keep the goal line."},
+        {"type": "message", "role": "assistant", "content": BETWEEN},
+        {"type": "function_call", "call_id": f"call-target-{index}", "name": "update_scratchpad",
+         "arguments": json.dumps({"contents": example["contents"]})},
+        {"type": "function_call_output", "call_id": f"call-target-{index}", "output": "Scratchpad updated."},
+    ]
+    return Task(
+        input=ITEMS.validate_json(json.dumps(conversation)),
+        env_params={"tools": TOOLS, "source": f"{example['match']}:{example['hand']}:cleanup"},
+    )
+
+
 def task(example: dict, index: int) -> Task:
+    if example.get("kind") == "cleanup":
+        return cleanup_task(example, index)
     conversation = items(example["messages"]) + [
         {"type": "reasoning", "content": brief_reason(example)},
         {"type": "message", "role": "assistant", "content": BETWEEN},
         {"type": "function_call", "call_id": f"call-target-{index}", "name": "submit_action",
          "arguments": json.dumps(example["action"])},
+        # The tool's reply closes the assistant turn. Without anything after the call, the first models kept writing
+        # past it (repeated calls, stray tags) and 10% of their decisions were unreadable.
+        {"type": "function_call_output", "call_id": f"call-target-{index}", "output": APPLIED.format(move=_move(example))},
     ]
     return Task(
         input=ITEMS.validate_json(json.dumps(conversation)),
@@ -90,14 +122,18 @@ def task(example: dict, index: int) -> Task:
 def build(examples: list[dict], max_fold_share: float, seed: int = 0, talk: bool = False) -> list[Task]:
     """All non-fold decisions, and folds capped at `max_fold_share` of the result so they do not swamp it."""
     rng = random.Random(seed)
+    cleanup = [e for e in examples if e.get("kind") == "cleanup"]
+    examples = [e for e in examples if e.get("kind") != "cleanup"]
     folds = [e for e in examples if e["action"]["action"] == "fold"]
-    rest = [e for e in examples if e["action"]["action"] != "fold"]
+    rest = [e for e in examples if e["action"]["action"] != "fold"] + cleanup
     if 0 <= max_fold_share < 1:
         folds = rng.sample(folds, min(len(folds), int(len(rest) * max_fold_share / (1 - max_fold_share))))
     chosen = folds + rest
     rng.shuffle(chosen)
     if talk:
         for e in chosen:
+            if e.get("kind") == "cleanup":
+                continue
             line = talk_line(e, rng)
             if line:
                 e["action"] = e["action"] | {"say": line}
@@ -115,8 +151,8 @@ def main() -> None:
     args = parser.parse_args()
     examples = [json.loads(line) for line in args.examples.read_text().splitlines() if line.strip()]
     tasks = build(examples, args.max_fold_share, talk=args.talk)
-    said = sum("say" in json.loads(t.input[-1].arguments) for t in tasks)
-    actions = Counter(json.loads(t.input[-1].arguments)["action"] for t in tasks)
+    said = sum("say" in json.loads(t.input[-2].arguments) for t in tasks)
+    actions = Counter(json.loads(t.input[-2].arguments).get("action", "update_scratchpad") for t in tasks)
     print(json.dumps({"examples": len(examples), "tasks": len(tasks), "actions": dict(actions), "with_talk": said}))
     if not args.upload:
         print("dry run: nothing uploaded (pass --upload to create the dataset)")

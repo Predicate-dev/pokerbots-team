@@ -106,9 +106,12 @@ async def one_game(
         else:
             style = styles.pop()
             if style == FIELD:
-                theirs = params | {"model_label": field_model}
+                # Several deployments can share the field seats (comma-separated), so opponents don't queue on one GPU.
+                fields = [m.strip() for m in field_model.split(",") if m.strip()]
+                theirs_model = fields[(seed + seat) % len(fields)]
+                theirs = params | {"model_label": theirs_model}
                 players.append(
-                    ModelSeat(name, relay_completion(client, GATEWAY_URL, key, theirs), rules, model=field_model,
+                    ModelSeat(name, relay_completion(client, GATEWAY_URL, key, theirs), rules, model=theirs_model,
                               cleanup_complete=_no_cleanup)
                 )
                 styles_by_seat[name] = "field"
@@ -265,7 +268,8 @@ def main() -> None:
                         help="mixed replaces two house imitations with generic scripted opponents; arena seats "
                              "--field-model in as many seats as other teams' bots took at recent arena tables")
     parser.add_argument("--field-model", default="vals-hackathon/entry",
-                        help="deployment that plays the other teams' seats with --lineup arena (default: base Qwen)")
+                        help="deployment(s) that play the other teams' seats with --lineup arena, comma-separated to spread "
+                             "the load (default: base Qwen)")
     args = parser.parse_args()
     if args.games < 1 or args.parallel < 1 or (args.hands is not None and args.hands < 1):
         parser.error("--games, --parallel and --hands must be positive")

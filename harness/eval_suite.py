@@ -15,10 +15,10 @@ What `run` starts, all at the same time:
 - notes             short real games: are the notes written after hand 1 and kept word for word (`checklist_check.py`)
 - games             full 30-hand arena-like games on fixed seeds (`score_local.py`)
 
-`report` reads two result folders. Call decisions are paired by decision id and games by seed, and each difference
-comes with a 95% bootstrap range, because a handful of large decisions and a few last places dominate both scores.
-A difference whose range includes zero is not evidence of anything: sixteen games cannot separate two models that
-differ by 0.1 rating points per game, so play at least 48 before believing a game result.
+`report` reads two result folders. Call decisions are paired by decision id and resampled by source match.
+Full games are paired and resampled by seed. Each difference comes with a 95% bootstrap range.
+When the range crosses zero, the direction is uncertain. A 16-game screen has low power for differences near
+0.1 rating points per game. Use the game estimate and its interval to decide whether more games are needed.
 """
 
 from __future__ import annotations
@@ -32,20 +32,15 @@ import re
 import statistics
 import sys
 import time
+from collections import defaultdict
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "opsd"))
+from price_run import best_call_answer, gain  # noqa: E402
+
 POINTS = {1: 0.83, 2: 0.63, 3: 0.38, 4: 0.05, 5: -0.45, 6: -1.45}  # rating change by finishing place, six equal seats
 SUITE = Path("runs/suite")
-
-
-def gain(row: dict) -> float:
-    """Rating points a call answer is worth over folding, from the spot's real equity (as `opsd/price_run.py`)."""
-    c = row["card"]
-    if row["answer"] != "continue" or row.get("equity") is None:
-        return 0.0
-    return row["equity"] * c["win_value"] + (1 - row["equity"]) * c["lose_value"] - c["fold_value"]
 
 
 def bootstrap(values: list[float], scale: float = 1.0, rounds: int = 2000) -> tuple[float, float, float]:
@@ -56,6 +51,23 @@ def bootstrap(values: list[float], scale: float = 1.0, rounds: int = 2000) -> tu
     n = len(values)
     means = sorted(scale * sum(values[rng.randrange(n)] for _ in range(n)) / n for _ in range(rounds))
     return scale * sum(values) / n, means[int(0.025 * rounds)], means[int(0.975 * rounds) - 1]
+
+
+def bootstrap_calls(values: dict[str, float], rounds: int = 2000) -> tuple[float, float, float]:
+    """Rating points per 1,000 decisions, resampling entire matches to keep related decisions together."""
+    if not values:
+        return 0.0, 0.0, 0.0
+    by_match = defaultdict(list)
+    for decision_id, gain_value in values.items():
+        by_match[decision_id.split(":", 1)[0]].append(gain_value)
+    matches = [(sum(group), len(group)) for group in by_match.values()]
+    rng = random.Random(0)
+    means = []
+    for _ in range(rounds):
+        sample = rng.choices(matches, k=len(matches))
+        means.append(1000 * sum(value for value, _ in sample) / sum(count for _, count in sample))
+    means.sort()
+    return 1000 * sum(values.values()) / len(values), means[int(0.025 * rounds)], means[int(0.975 * rounds) - 1]
 
 
 # ---------------------------------------------------------------------------------------------------------- run
@@ -108,10 +120,10 @@ async def run(args: argparse.Namespace) -> None:
     results = await asyncio.gather(*(start(label, command, out / f"{label.replace(', ', '_').replace(' ', '_')}.log", here)
                                      for label, command in jobs.items()))
     failed = [label for label, code, _ in results if code]
-    print()
-    show(args.name, load(args.name))
     if failed:
         raise SystemExit(f"failed: {', '.join(failed)}")
+    print()
+    show(args.name, load(args.name))
 
 
 # ------------------------------------------------------------------------------------------------------- results
@@ -120,7 +132,10 @@ async def run(args: argparse.Namespace) -> None:
 def rows(path: Path) -> dict[str, dict]:
     if not path.exists():
         return {}
-    return {r["id"]: r for r in map(json.loads, path.read_text().splitlines()) if r.get("card")}
+    results = [r for r in map(json.loads, path.read_text().splitlines()) if r.get("card")]
+    if any("error" in r for r in results):
+        raise SystemExit(f"{path} includes failed AC2 requests; rerun that evaluation")
+    return {r["id"]: r for r in results}
 
 
 def games(folder: Path) -> dict[int, dict]:
@@ -196,9 +211,8 @@ def load(name: str) -> dict:
 
 def calls_summary(data: dict[str, dict]) -> str:
     r = list(data.values())
-    mean, low, high = bootstrap([gain(x) for x in r], 1000)
-    best = sum((x["answer"] == "continue") == (x["equity"] * x["card"]["win_value"] + (1 - x["equity"]) * x["card"]["lose_value"]
-                                                 > x["card"]["fold_value"]) for x in r)
+    mean, low, high = bootstrap_calls({identity: gain(x) for identity, x in data.items()})
+    best = sum(x["answer"] == best_call_answer(x) for x in r)
     clear = [x for x in r if x["card"]["plan"] != "close"]
     return (f"{len(r)} decisions | {mean:+.1f} rating pts per 1000 [{low:+.0f}, {high:+.0f}] | best answer {100 * best / len(r):.0f}% | "
             f"follows the card {100 * sum(x['answer'] == x['card']['plan'] for x in clear) / max(1, len(clear)):.0f}% | "
@@ -252,12 +266,12 @@ def report(args: argparse.Namespace) -> None:
     candidate, baseline = load(args.candidate), load(args.baseline)
     show(args.baseline, baseline)
     show(args.candidate, candidate)
-    print(f"\n== {args.candidate} minus {args.baseline}, paired (a range that includes 0 is not evidence)")
+    print(f"\n== {args.candidate} minus {args.baseline}, paired (95% intervals)")
     verdicts = []
     for key, label in (("calls_notes", "calls with notes"), ("calls_empty", "calls, empty")):
         both = sorted(set(candidate[key]) & set(baseline[key]))
         if both:
-            mean, low, high = bootstrap([gain(candidate[key][i]) - gain(baseline[key][i]) for i in both], 1000)
+            mean, low, high = bootstrap_calls({i: gain(candidate[key][i]) - gain(baseline[key][i]) for i in both})
             print(f"  {label:17}: {mean:+.1f} rating pts per 1000 [{low:+.0f}, {high:+.0f}] over {len(both)} shared decisions")
             verdicts.append((label, low, high))
     shared = set(candidate["games"]) & set(baseline["games"])

@@ -15,9 +15,9 @@ priced fairly. This is the task for opening, bet sizing and end-game play; the c
   will have. Hand 1 starts empty, as in a real game.
 - Opponents: preserve the house styles and seats from each source game. Team seats use the field model answering
   without thinking. Use --house-share for a controlled randomized mix instead.
-- Hands: every hand where we held something playable, plus a share of the rest so folding rubbish stays rewarded.
+- Hands: training keeps playable hands and samples the rest. Selection keeps every hand in its held-out games.
 
-Writes `<prefix>-train` and `<prefix>-select`, split by game.
+Writes `<prefix>-train` and `<prefix>-select` using the same match split as the call and opening benchmarks.
 """
 
 from __future__ import annotations
@@ -36,6 +36,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "opsd"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "harness" / "src"))
 from poker_harness.arena_lineups import replay_roster  # noqa: E402
 from poker_harness.house_bots import HOUSE_STYLES  # noqa: E402
+from poker_harness.replay_split import held_out  # noqa: E402
 from price_card import preflop_class  # noqa: E402
 
 from vals_tools.tasks import Opponents, snapshot_datasets  # noqa: E402
@@ -86,7 +87,7 @@ def main() -> None:
             continue
         kind = preflop_class(cards)
         rng = random.Random(f"{spot['game_id']}:{spot['first_hand']}")
-        if kind not in PLAYABLE and rng.random() >= args.other_share:
+        if not held_out(spot["game_id"]) and kind not in PLAYABLE and rng.random() >= args.other_share:
             stats["unplayable hand left out"] += 1
             continue
         stats[f"hand: {kind}"] += 1
@@ -100,7 +101,7 @@ def main() -> None:
         lineup_by_spot[key] = specs
         spots.append(spot)
     opponents = Opponents(model=args.field_model, api="chat", reasoning_effort=None)
-    built = snapshot_datasets(args.prefix, spots, opponents, ledger=False, personas=False)
+    built = snapshot_datasets(args.prefix, spots, opponents, ledger=False, personas=False, select_game=held_out)
     for tasks in built.values():
         for task in tasks:
             env = task.env_params

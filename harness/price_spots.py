@@ -23,14 +23,10 @@ from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 from clone_from_replays import replay_hand
+from poker_harness.replay_split import held_out
 from puzzles import equity
 
-SELECT_ONE_IN = 6  # the same held-out matches as rl/make_puzzle_dataset.py
 FORCED = ("fallback", "coerced", "format_error", "afk", "timed_out", "token_cap", "sat_out", "error", "scripted")
-
-
-def held_out(match_id: str) -> bool:
-    return int(hashlib.sha1(match_id.encode()).hexdigest(), 16) % SELECT_ONE_IN == 0
 
 
 async def spots(path: Path, min_share: float) -> list[dict]:

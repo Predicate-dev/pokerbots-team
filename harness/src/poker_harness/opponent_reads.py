@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 
 PLACEMENT_GUIDANCE = """Play for finishing place. Consider hands remaining, effective stacks, whether you cover
 the opponent, and which players you can realistically pass. Favor low-cost edges. Before risking much of your stack,
@@ -42,8 +42,13 @@ def betting_evidence(messages: list[str], prior: str = "") -> str:
     hero = _HERO.search(text)
     if hero is None:
         return ""
-    actions = ((street, int(seat), action, int(amount or 0)) for street, seat, action, amount in _BETTING.findall(text))
-    return _update_counts(int(hero[1]), actions, prior)
+    return _update_counts(int(hero[1]), public_betting_actions(text), prior)
+
+
+def public_betting_actions(text: str) -> Iterator[tuple[str, int, str, int]]:
+    """Read the action fields of official event seat lines without their quoted table talk."""
+    for street, seat, action, amount in _BETTING.findall(text):
+        yield street, int(seat), action, int(amount or 0)
 
 
 def _update_counts(hero: int, actions: Iterable[tuple[str, int, str, int]], prior: str) -> str:

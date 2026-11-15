@@ -43,6 +43,8 @@ from build_dataset import ITEMS, SCRATCHPAD, SUBMIT, TOOLS, is_official_prompt  
 from build_from_gateway import fetch_spans  # noqa: E402
 from build_price_dataset import spot_key  # noqa: E402
 from poker_harness.opponent_reads import betting_evidence  # noqa: E402
+from poker_harness.prompts import parse_tool_call, prompt_legal_actions  # noqa: E402
+from poker_harness.seat import invalid_action  # noqa: E402
 from price_card import (  # noqa: E402
     POSTFLOP_NAMES,
     _strength,
@@ -176,7 +178,7 @@ def decision_task(row: dict, block: str, held_out: set, max_tokens: int, need_bl
     rules = playbook_rules.verdicts(prompt, arguments) if playbook else []
     if any(not followed for _, followed in rules):
         return None, "against the playbook: " + ",".join(rule for rule, followed in rules if not followed)
-    if arguments.get("talk") and playbook:
+    if arguments.get("say") and playbook:
         return None, "talks"
     if (REPLACED and "PLAYBOOK" in prompt[1]["content"] and block not in prompt[1]["content"]
             and DROPPED_LINE_USE.search(json.dumps(reply))):
@@ -194,6 +196,10 @@ def decision_task(row: dict, block: str, held_out: set, max_tokens: int, need_bl
     if state is None:
         return None, "unreadable state"
     spot, rest = state
+    decision, invalid = parse_tool_call(arguments)
+    legal = prompt_legal_actions(rest)
+    if invalid or legal is None or invalid_action(decision, legal):
+        return None, "illegal action"
     c = card(prompt)
     kind = "other"
     if c is not None:
@@ -250,8 +256,8 @@ def decision_task(row: dict, block: str, held_out: set, max_tokens: int, need_bl
         if ("B", True) in rules:
             kind = "flop bet"
         made = postflop_class(spot["hole"], spot["board"])
-        if made in ("monster", "trips") and action == "fold":
-            return None, "folds a very strong hand"
+        if made in ("monster", "trips") and action == "fold" and (c is None or c["plan"] != "fold"):
+            return None, "folds a very strong hand without support from the card"
         lead_reasoning(reply, f"My hand: {hand_name(spot['hole'], spot['board'])}.")  # name the made hand before anything else
     if not has_block:  # a trace from real play: show the notes as this model will have them
         pad = clean_pad(prompt[1]["content"])

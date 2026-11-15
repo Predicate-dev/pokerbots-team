@@ -22,7 +22,6 @@ last or next to last, which the arena's rating punishes far more than it rewards
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import random
 import sys
@@ -33,11 +32,13 @@ from ac2.runtime import Message, Task
 from ac2.sdk import Client
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "harness" / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "opsd"))
+from poker_harness.replay_split import held_out as is_select  # noqa: E402
+
 from vals_tools.tasks import TABLE_RULES  # noqa: E402
 
 RISK_BUST, RISK_EARLY = 1.5, 1.25  # most of the stack with 5-6 players left; any stack-sized call with 5-6 left
-SELECT_ONE_IN = 6
 
 
 def risk(players_left: int, share_of_stack: float) -> float:
@@ -47,7 +48,7 @@ def risk(players_left: int, share_of_stack: float) -> float:
 
 
 def puzzle_task(puzzle: dict, match: dict, label: dict | None = None) -> Task:
-    match_id, hand_number, seat, action_index = puzzle["id"].split(":")
+    _, hand_number, seat, action_index = puzzle["id"].split(":")
     seat, action_index = int(seat), int(action_index)
     hand = next(h for h in match["hands"] if h["hand_number"] == int(hand_number))
     logged = hand["actions"][action_index]
@@ -123,10 +124,6 @@ def build_rated(args: argparse.Namespace, matches: dict) -> tuple[dict[str, list
     balanced = rng.sample(train["fold"], size) + rng.sample(train["continue"], size)
     rng.shuffle(balanced)
     return {f"{args.prefix}-train": balanced, f"{args.prefix}-select": select}, stats
-
-
-def is_select(match_id: str) -> bool:
-    return int(hashlib.sha1(match_id.encode()).hexdigest(), 16) % SELECT_ONE_IN == 0
 
 
 def main() -> None:

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import random
 import zlib
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -282,14 +283,17 @@ def snapshot_task(spot: dict[str, Any], opponents: Opponents, ledger: bool = Tru
 
 
 def snapshot_datasets(
-    prefix: str, spots: list[dict[str, Any]], opponents: Opponents, ledger: bool = True, personas: bool = False
+    prefix: str, spots: list[dict[str, Any]], opponents: Opponents, ledger: bool = True, personas: bool = False,
+    *, select_game: Callable[[str], bool] | None = None,
 ) -> dict[str, list[Task]]:
-    """`<prefix>-train` and `<prefix>-select` from snapshots. A game's hands all go to the same split (about one
-    game in ten to select), so a checkpoint is never picked on hands from a game it trained on. Order is shuffled,
-    the same way every time, so a training step mixes games."""
+    """Split snapshots by game and shuffle each split. The default reserves about one game in ten for selection.
+
+    With replay-based decision benchmarks, pass their game predicate to keep their held-out games out of training.
+    """
     built: dict[str, list[Task]] = {f"{prefix}-train": [], f"{prefix}-select": []}
     for spot in spots:
-        held_out = zlib.crc32(str(spot["game_id"]).encode()) % SELECT_ONE_GAME_IN == 0
+        game = str(spot["game_id"])
+        held_out = select_game(game) if select_game is not None else zlib.crc32(game.encode()) % SELECT_ONE_GAME_IN == 0
         task = snapshot_task(spot, opponents, ledger, personas)
         built[f"{prefix}-select" if held_out else f"{prefix}-train"].append(task)
     for tasks in built.values():

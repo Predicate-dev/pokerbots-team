@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import random
 from collections import Counter, defaultdict
@@ -17,6 +16,7 @@ import terminal_calls as terminal
 from poker_harness.arena_lineups import HOUSE_ENTRIES
 from poker_harness.completions import EVENT_PARAMS, table_rules
 from poker_harness.prompts import system_prompt
+from poker_harness.replay_split import held_out
 from pokerkit import HandHistory
 
 FORCED = (
@@ -34,10 +34,6 @@ OFFICIAL_SYSTEM = {
     "role": "system",
     "content": system_prompt(table_rules(EVENT_PARAMS)),
 }
-
-
-def held_out(identity: str) -> bool:
-    return int(hashlib.sha1(identity.encode()).hexdigest(), 16) % 6 == 0
 
 
 def pluribus_counts(directory: Path) -> dict:

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import secrets
 import subprocess
 import sys
 import time
@@ -41,17 +42,35 @@ print(json.dumps({"status": str(getattr(c.train.get(sys.argv[1]), "status", ""))
 
 def state(train: str, project: str) -> dict:
     out = subprocess.run([ROOT_PYTHON, "-c", LIST, train, project], capture_output=True, text=True, check=False, cwd=ROOT)
+    if out.returncode:
+        raise SystemExit(f"could not read AC2 run {project}/{train}: {out.stderr.strip()[-400:]}")
     try:
         return json.loads(out.stdout.strip().splitlines()[-1])
     except (ValueError, IndexError):
-        return {"status": "unknown", "checkpoints": []}
+        raise SystemExit(f"unexpected checkpoint response for {project}/{train}") from None
 
 
-def deploy(name: str, checkpoint: str | None) -> bool:
-    command = [ROOT_PYTHON, "-u", "-m", "vals_tools.deploy", "--name", name]
-    command += ["--checkpoint", checkpoint] if checkpoint else ["--delete"]
+def deployment_command(project: str, name: str) -> list[str]:
+    return [ROOT_PYTHON, "-u", "-m", "vals_tools.deploy", "--project", project, "--name", name]
+
+
+def delete(project: str, name: str, deployment_id: str) -> None:
+    subprocess.run([*deployment_command(project, name), "--delete-id", deployment_id], check=True, cwd=ROOT)
+
+
+def deploy(project: str, name: str, checkpoint: str) -> str | None:
+    command = [*deployment_command(project, name), "--checkpoint", checkpoint]
     done = subprocess.run(command, capture_output=True, text=True, check=False, cwd=ROOT)
-    return done.returncode == 0
+    prefix = f"deploying {project}/{name} as "
+    created = next((line.removeprefix(prefix) for line in done.stdout.splitlines() if line.startswith(prefix)), None)
+    if done.returncode == 0:
+        if not created:
+            raise SystemExit(f"could not identify deployment for {project}/{name}")
+        return created
+    if created:
+        delete(project, name, created)
+    print(f"  deploy failed: {(done.stderr or done.stdout).strip()[-400:]}", flush=True)
+    return None
 
 
 def compare(name: str, baseline: str) -> dict:
@@ -67,7 +86,7 @@ def compare(name: str, baseline: str) -> dict:
         }
         both = sorted(set(candidate[key]) & set(base[key]))
         if both:
-            mean, low, high = eval_suite.bootstrap([eval_suite.gain(candidate[key][i]) - eval_suite.gain(base[key][i]) for i in both], 1000)
+            mean, low, high = eval_suite.bootstrap_calls({i: eval_suite.gain(candidate[key][i]) - eval_suite.gain(base[key][i]) for i in both})
             row[key] |= {"vs_baseline": round(mean, 1), "low": round(low, 1), "high": round(high, 1)}
     return row
 
@@ -82,11 +101,20 @@ def line(step: int, row: dict) -> str:
     return " | ".join(parts)
 
 
+def eligible(row: dict) -> bool:
+    notes, empty = row.get("calls_notes", {}), row.get("calls_empty", {})
+    return notes.get("vs_baseline") is not None and all(
+        arm.get("decisions") and arm["invalid"] <= 0.05 * arm["decisions"] for arm in (notes, empty)
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--train", required=True, help="the training run's id")
     parser.add_argument("--baseline", required=True, help="a results folder under runs/suite/ to compare with")
     parser.add_argument("--notes-file", type=Path, required=True)
+    parser.add_argument("--spots", type=Path, help="held-out call spot bank used by the baseline")
+    parser.add_argument("--opponent-replays", type=Path, help="source replays if the baseline used prior betting notes")
     parser.add_argument("--prefix", required=True, help="deployment and results name prefix")
     parser.add_argument("--project", default="vals-hackathon")
     parser.add_argument("--skip-steps", type=int, nargs="*", default=[], help="checkpoint steps not to test")
@@ -102,7 +130,8 @@ def main() -> None:
             tested[row["step"]] = row
     while True:
         now = state(args.train, args.project)
-        waiting = sorted((step, ckpt) for step, ckpt in now["checkpoints"] if step not in tested and step not in args.skip_steps)
+        waiting = sorted((step, ckpt) for step, ckpt in now["checkpoints"]
+                         if step is not None and step not in tested and step not in args.skip_steps)
         if not waiting:
             if now["status"] not in ("running", "queued", "pending", "starting", "unknown"):
                 break
@@ -110,19 +139,24 @@ def main() -> None:
             continue
         step, checkpoint = waiting[0]
         name = f"{args.prefix}-s{step}"
-        print(f"{time.strftime('%H:%M')} step {step} ({checkpoint}): deploying as {name}", flush=True)
-        if not deploy(name, checkpoint):
-            print(f"  deploy failed; will retry on the next pass", flush=True)
+        temporary = f"{name}-{secrets.token_hex(4)}"
+        print(f"{time.strftime('%H:%M')} step {step} ({checkpoint}): deploying as {temporary}", flush=True)
+        deployment_id = deploy(args.project, temporary, checkpoint)
+        if not deployment_id:
             time.sleep(args.poll_seconds)
             continue
-        suite = subprocess.run(
-            [sys.executable, "eval_suite.py", "run", "--model", f"{args.project}/{name}", "--name", name,
-             "--notes-file", str(args.notes_file), "--parallel", str(args.parallel), "--skip", "games", "notes", "opens"],
-            capture_output=True, text=True, check=False,
-        )
-        deploy(name, None)  # free the GPU whatever happened
+        command = [sys.executable, "eval_suite.py", "run", "--model", f"{args.project}/{temporary}", "--name", name,
+                   "--notes-file", str(args.notes_file), "--parallel", str(args.parallel), "--skip", "games", "notes", "opens"]
+        if args.spots:
+            command.extend(("--spots", str(args.spots)))
+        if args.opponent_replays:
+            command.extend(("--opponent-replays", str(args.opponent_replays)))
+        try:
+            suite = subprocess.run(command, capture_output=True, text=True, check=False)
+        finally:
+            delete(args.project, temporary, deployment_id)
         if suite.returncode:
-            print(f"  evaluation failed:\n{suite.stdout[-400:]}", flush=True)
+            print(f"  evaluation failed:\n{(suite.stderr or suite.stdout)[-400:]}", flush=True)
             tested[step] = {"step": step, "checkpoint": checkpoint, "failed": True}
             continue
         row = compare(name, args.baseline) | {"step": step, "checkpoint": checkpoint}
@@ -135,15 +169,16 @@ def main() -> None:
             flag = "   <-- clearly worse than the baseline"
         elif notes.get("low", 0) > 0:
             flag = "   <-- clearly better than the baseline"
-        if notes.get("decisions") and notes["invalid"] > 0.05 * notes["decisions"]:
-            flag += "   <-- too many invalid replies"
+        if not eligible(row):
+            flag += "   <-- missing paired results or too many invalid replies"
         print(f"{time.strftime('%H:%M')} {line(step, row)}{flag}", flush=True)
     scored = {step: row for step, row in tested.items() if row.get("calls_notes", {}).get("vs_baseline") is not None}
     print("\nall checkpoints tested:")
     for step in sorted(scored):
         print("  " + line(step, scored[step]))
-    if scored:
-        best = max(scored, key=lambda step: scored[step]["calls_notes"]["vs_baseline"])
+    candidates = [step for step, row in scored.items() if eligible(row)]
+    if candidates:
+        best = max(candidates, key=lambda step: scored[step]["calls_notes"]["vs_baseline"])
         print(f"best on calls with notes: step {best} ({scored[best]['checkpoint']}). Run the full suite with games on it before entering it.")
 
 

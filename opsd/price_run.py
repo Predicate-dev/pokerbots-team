@@ -35,7 +35,13 @@ import open_card  # noqa: E402
 from hint import SEPARATOR  # noqa: E402
 from poker_harness.completions import GATEWAY_URL, relay_completion, with_preset  # noqa: E402
 from poker_harness.opponent_reads import replay_betting_evidence  # noqa: E402
-from poker_harness.prompts import talk_fields  # noqa: E402
+from poker_harness.prompts import (  # noqa: E402
+    SUBMIT_ACTION,
+    parse_tool_call,
+    prompt_legal_actions,
+    talk_fields,
+)
+from poker_harness.seat import Completion, invalid_action  # noqa: E402
 from price_card import card, hint  # noqa: E402
 
 PAD = re.compile(r"<<<SCRATCHPAD\n(.*)\nSCRATCHPAD>>>\n(\d+)/(\d+) characters", re.DOTALL)
@@ -81,18 +87,37 @@ def replay_notes(directory: Path, rows: list[dict]) -> dict[str, str]:
     return notes
 
 
-def gain(row: dict, c: dict, answer: str) -> float:
-    if answer != "continue" or row.get("equity") is None:
+def gain(row: dict, answer: str | None = None) -> float:
+    if (row["answer"] if answer is None else answer) != "continue" or row.get("equity") is None:
         return 0.0
+    c = row["card"]
     return row["equity"] * c["win_value"] + (1 - row["equity"]) * c["lose_value"] - c["fold_value"]
+
+
+def best_call_answer(row: dict) -> str:
+    return "continue" if gain(row, "continue") > 0 else "fold"
+
+
+def submitted_action(reply: Completion, prompt: str) -> tuple[str, dict]:
+    """Require the one legal tool submission used for teacher collection."""
+    if reply.truncated or len(reply.tool_calls) != 1 or reply.tool_calls[0]["function"]["name"] != SUBMIT_ACTION:
+        return "", {}
+    if not isinstance(reply.tool_arguments, (str, dict)):
+        return "", {}
+    decision, error = parse_tool_call(reply.tool_arguments)
+    legal = prompt_legal_actions(prompt)
+    if error or legal is None or invalid_action(decision, legal):
+        return "", {}
+    action = legal.raise_type if decision.type in ("bet", "raise") else decision.type
+    return action, {"action": action, "amount": decision.amount}
 
 
 def summarize(name: str, rows: list[dict]) -> str:
     if not rows:
         return f"  {name:28} none"
     n = len(rows)
-    points = sum(gain(r, r["card"], r["answer"]) for r in rows)
-    best = sum((r["answer"] == "continue") == (gain(r, r["card"], "continue") > 0) for r in rows)
+    points = sum(map(gain, rows))
+    best = sum(r["answer"] == best_call_answer(r) for r in rows)
     agree = sum(r["answer"] == r["card"]["plan"] for r in rows if r["card"]["plan"] != "close")
     clear = sum(r["card"]["plan"] != "close" for r in rows)
     return (f"  {name:28} n {n:4} | {1000 * points / n:+7.1f} rating points per 1000 | best answer {100 * best / n:3.0f}% | "
@@ -122,6 +147,8 @@ async def run(args: argparse.Namespace) -> None:
     rng.shuffle(rows)
     if args.limit:
         rows = rows[: args.limit]
+    if not rows:
+        raise SystemExit(f"no eligible {args.decision} decisions in {args.spots}")
     params = with_preset({"preset": "event", "seed": 0, "submit_fields": ["action", "amount"]})
     params["submit_fields"] = talk_fields(params["submit_fields"])
     notes = args.notes_file.read_text().strip() if args.notes_file else ""
@@ -147,14 +174,11 @@ async def run(args: argparse.Namespace) -> None:
             async with gate:
                 try:
                     reply = await complete(messages)
-                    arguments = reply.tool_arguments
-                    parsed = json.loads(arguments) if isinstance(arguments, str) else (arguments or {})
-                    if reply.truncated or (opening and len(reply.tool_calls) != 1):
-                        parsed = {}
-                    action = str(parsed.get("action", ""))
-                    extra = {"reasoning": reply.reasoning, "text": reply.text, "out_tokens": reply.out_tokens, "calls": len(reply.tool_calls)}
                 except Exception as exc:  # noqa: BLE001
                     action, parsed, extra = "", {}, {"error": type(exc).__name__}
+                else:
+                    action, parsed = submitted_action(reply, messages[-1]["content"])
+                    extra = {"reasoning": reply.reasoning, "text": reply.text, "out_tokens": reply.out_tokens, "calls": len(reply.tool_calls)}
             if opening:
                 answer = open_card.answer(row["card"], parsed)
             else:
@@ -166,6 +190,8 @@ async def run(args: argparse.Namespace) -> None:
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text("".join(json.dumps({k: v for k, v in r.items() if k != "messages"}) + "\n" for r in done))
+    if failures := sum("error" in row for row in done):
+        raise SystemExit(f"AC2 requests failed for {failures}/{len(done)} {args.decision} decisions")
     print(f"{args.model}{' with the card' if args.hint else ''}: {len(done)} {args.decision} decisions from "
           f"{'held-out' if args.held_out else 'training'} matches")
     if observed is not None:

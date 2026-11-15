@@ -20,15 +20,15 @@ import re
 from typing import Any
 
 import open_card
+from poker_harness.opponent_reads import public_betting_actions
+from poker_harness.prompts import prompt_legal_actions
 from price_card import parse_state, postflop_class, preflop_class
 
 RANKS = "23456789TJQKA"
 BIG_POT = 20
 ORDINARY_RAISE = 12  # a raise to more than this is a shove or an over-bet, which the checklist prices instead
-_RAISE = re.compile(r"preflop: [^\n]*? raise to (\d+)")
 _STREET = re.compile(r"Street: (\w+)")
 _SEAT = re.compile(r"\(you\) stack (\d+), bet (\d+)")
-_CALL = re.compile(r"call (\d+)")
 
 
 def opens(position: str, hole: list[str]) -> bool:
@@ -55,9 +55,11 @@ def own_actions(prompt: list[dict]) -> list[tuple[str, str]]:
                 street = found[1]
         elif item.get("type") == "function_call" and item.get("name") == "submit_action":
             try:
-                out.append((street, json.loads(item["arguments"]).get("action")))
+                arguments = json.loads(item["arguments"])
             except (TypeError, ValueError):
                 continue
+            if isinstance(arguments, dict) and isinstance(action := arguments.get("action"), str):
+                out.append((street, action))
     return out
 
 
@@ -66,6 +68,9 @@ def verdicts(prompt: list[dict], arguments: dict) -> list[tuple[str, bool]]:
     if parsed is None:
         return []
     spot, rest = parsed
+    legal = prompt_legal_actions(rest)
+    if legal is None:
+        return []
     action = arguments.get("action")
     hole, street = spot["hole"], spot["street"]
     earlier = own_actions(prompt)
@@ -75,19 +80,18 @@ def verdicts(prompt: list[dict], arguments: dict) -> list[tuple[str, bool]]:
     queens_up = hand in ("QQ+", "AK")
     if street == "preflop":
         first_in = open_card.parse(prompt)
-        raises = [int(n) for n in _RAISE.findall(users[-1])]
+        raises = [amount for street, _, move, amount in public_betting_actions(users[-1])
+                  if street == "preflop" and move == "raise"]
         if first_in is not None and not earlier and first_in["stack"] >= BIG_POT:
-            if action == "call":
-                out.append(("A", False))
-            else:
-                out.append(("A", (action == "raise") == opens(first_in["position"], hole)))
-        elif not earlier and len(raises) == 1 and raises[0] <= ORDINARY_RAISE:
+            expected = "raise" if opens(first_in["position"], hole) else "fold"
+            out.append(("A", action == expected))
+        elif not earlier and len(raises) == 1 and raises[0] <= ORDINARY_RAISE and legal.raise_type:
             ace_queen = sorted(c[0] for c in hole) == ["A", "Q"]
             if queens_up or hand == "99-JJ" or ace_queen:
                 out.append(("D", action == "raise"))
         elif any(a == "raise" for s, a in earlier if s == "preflop") and raises and "Since your last action" in users[-1]:
             out.append(("D", (action != "fold") == queens_up))
-    elif street == "flop" and "Legal actions: check" in rest:
+    elif street == "flop" and legal.can_check and legal.raise_type:
         raised = any(a == "raise" for s, a in earlier if s == "preflop")
         if raised and not any(s == "flop" for s, _ in earlier):
             out.append(("B", action in ("bet", "raise")))
@@ -97,8 +101,7 @@ def verdicts(prompt: list[dict], arguments: dict) -> list[tuple[str, bool]]:
     if first and now and action in ("call", "bet", "raise"):
         start = int(first[1]) + int(first[2])
         if action == "call":
-            found = _CALL.search(rest)
-            added = min(int(found[1]), int(now[1])) if found else 0
+            added = min(legal.call_amount, int(now[1]))
         else:
             added = int(arguments.get("amount") or 0) - int(now[2])
         total = start - int(now[1]) + added

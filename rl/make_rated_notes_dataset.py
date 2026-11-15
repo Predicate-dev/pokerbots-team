@@ -1,12 +1,12 @@
 """Rating-scored puzzle datasets where the seat starts with its notes block already in the scratchpad.
 
     uv run python rl/make_rated_notes_dataset.py --spots harness/runs/price_spots_v2.jsonl --replays arena_data \\
-        --notes-file opsd/notes/call_checklist.txt --prefix pokerbots-ratednotes            # dry run; add --upload
+        --notes-file opsd/notes/checklist_and_guide.txt --prefix pokerbots-ratednotes     # dry run; add --upload
 
 The same tasks as `rl/make_puzzle_dataset.py --spots` (every sizeable call decision, rewarded in rating points, the
 training split balanced between fold and continue), with one difference: `env_params.puzzle.notes` holds the notes a
-model trained to keep a checklist will have in front of it. First-hand decisions keep an empty scratchpad, as in a
-real game.
+model trained to keep a checklist will have in front of it. The opponent guide adds that seat's prior public
+betting counts from the source replay. First-hand decisions keep an empty scratchpad, as in a real game.
 """
 
 from __future__ import annotations
@@ -14,12 +14,37 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections import defaultdict
 from pathlib import Path
 
+from ac2.runtime import Task
 from ac2.sdk import Client
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "harness" / "src"))
 import make_puzzle_dataset as base  # noqa: E402
+from poker_harness.opponent_reads import replay_betting_evidence  # noqa: E402
+
+
+def add_notes(built: dict[str, list[Task]], matches: dict, notes: str) -> dict[str, int]:
+    puzzles = defaultdict(list)
+    for tasks in built.values():
+        for task in tasks:
+            puzzle = task.env_params["puzzle"]
+            hand = puzzle["hand"]["hand_number"]
+            if hand > 1:
+                puzzles[puzzle["id"].split(":", 1)[0]].append(((hand, puzzle["seat"]), puzzle))
+    with_evidence = 0
+    for match_id, records in puzzles.items():
+        evidence = (
+            replay_betting_evidence(matches[match_id], (spot for spot, _ in records))
+            if "OPPONENT GUIDE" in notes else {}
+        )
+        for spot, puzzle in records:
+            prior = evidence.get(spot, "")
+            puzzle["notes"] = "\n\n".join(filter(None, (notes, prior)))[:5000]
+            with_evidence += bool(prior and prior in puzzle["notes"])
+    return {"tasks with notes": sum(map(len, puzzles.values())), "tasks with opponent notes": with_evidence}
 
 
 def main() -> None:
@@ -37,16 +62,10 @@ def main() -> None:
         match = json.loads(path.read_text())
         matches[match["id"]] = match
     built, stats = base.build_rated(args, matches)
-    with_notes = 0
-    for tasks in built.values():
-        for task in tasks:
-            puzzle = task.env_params["puzzle"]
-            if puzzle["hand"]["hand_number"] > 1:
-                puzzle["notes"] = notes
-                with_notes += 1
+    notes_stats = add_notes(built, matches, notes)
     for name, tasks in built.items():
         print(name, len(tasks))
-    print(json.dumps(dict(sorted(stats.items())) | {"tasks with notes": with_notes}))
+    print(json.dumps(dict(sorted(stats.items())) | notes_stats))
     if not args.upload:
         print("dry run: nothing uploaded (pass --upload to create the datasets)")
         return

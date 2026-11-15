@@ -240,6 +240,10 @@ actions by seat. The request keeps the official system prompt. Run again with th
 `--opponent-replays` for the fixed-checklist control, and compare the decisions with prior evidence. For SFT
 collection, use the training split by omitting `--held-out`. Keep the official system prompt and give
 `build_checklist_sft.py` the same notes file and the deployment ID and start time of the collection run.
+`rl/make_rated_notes_dataset.py --notes-file opsd/notes/checklist_and_guide.txt` adds the same prior betting
+counts to placement-scored puzzles. After rebuilding `rl/make_whole_hand_dataset.py`, use a fresh dataset prefix
+for upload so previous tasks cannot carry over. Its selection games now follow the same held-out split as the
+call and opening benchmarks.
 
 ## Terminal call teacher
 

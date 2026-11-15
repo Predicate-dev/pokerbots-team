@@ -40,6 +40,7 @@ from build_dataset import ITEMS, SCRATCHPAD, SUBMIT, TOOLS, is_official_prompt  
 from build_from_gateway import fetch_spans  # noqa: E402
 from build_price_dataset import spot_key  # noqa: E402
 import open_card  # noqa: E402
+import playbook_rules  # noqa: E402
 from price_card import POSTFLOP_NAMES, _strength, card, parse_state, postflop_class, preflop_class  # noqa: E402
 from price_run import PAD, with_notes  # noqa: E402
 
@@ -47,9 +48,11 @@ NOTES = Path(__file__).with_name("notes") / "call_checklist.txt"
 KEEP = "The CALL CHECKLIST block stays at the top of my notes, word for word. Below it I write my notes for this hand."
 KEEP_BOTH = ("The CALL CHECKLIST and OPPONENT GUIDE blocks stay at the top of my notes, word for word. Below them I name "
              "each seat's type from its talk and play, then write my notes for this hand.")
+KEEP_PLAYBOOK = ("The CALL CHECKLIST and PLAYBOOK blocks stay at the top of my notes, word for word. Below them I write "
+                 "my notes for this hand.")
 LIMIT = 5_000
 REPLACED = ""  # an earlier wording of the block that generated replies were shown (`--generated-with`)
-DROPPED_LINE_USE = re.compile(r"subtract 20|show me|oh no, sorry|never bets without", re.IGNORECASE)
+DROPPED_LINE_USE = re.compile(r"subtract 20|show me|oh no, sorry|never bets without|\b(?:rule|playbook) [DE]\b|\b[DE]\)", re.IGNORECASE)
 # a call decision is a training target only if its reply works from the checklist, not merely agrees with it
 USES_NOTES = re.compile(r"checklist|place margin|win ?%|\bneed\b|opponent guide|my notes", re.IGNORECASE)
 _SAID = re.compile(r'\(seat (\d+)\)[^\n]*? says: "([^"\n]*)"')
@@ -82,6 +85,7 @@ def seat_types(prompt: list[dict]) -> str:
 _OLD_BLOCKS = (
     re.compile(r"CALL CHECKLIST.*?(?=\n\n|\Z)", re.DOTALL),  # a block has no blank line inside it
     re.compile(r"OPPONENT GUIDE.*?(?=\n\n|\Z)", re.DOTALL),
+    re.compile(r"PLAYBOOK.*?(?=\n\n|\Z)", re.DOTALL),
     re.compile(r"^Seat types:[^\n]*\n?", re.MULTILINE),
 )
 
@@ -152,13 +156,14 @@ def notes_task(row: dict, block: str, show_block: bool, max_tokens: int) -> Task
     if show_block and not empty:
         prompt[1] = prompt[1] | {"content": with_notes(prompt[1]["content"], block)}
     guide = "OPPONENT GUIDE" in block
+    keep = KEEP_BOTH if guide else KEEP_PLAYBOOK if "PLAYBOOK" in block else KEEP
     types = seat_types(prompt) if guide else ""
     new = f"{block}\n\n{types + chr(10) if types else ''}{contents}"[:LIMIT]
     call["arguments"] = json.dumps({"contents": new})
     for item in reply:  # a reasoning that already opens with the keep sentence gets it once
         if item.get("type") == "reasoning" and isinstance(item.get("content"), str):
-            item["content"] = item["content"].replace(KEEP_BOTH, "").replace(KEEP, "").strip()
-    lead_reasoning(reply, KEEP_BOTH if guide else KEEP)
+            item["content"] = item["content"].replace(KEEP_BOTH, "").replace(KEEP_PLAYBOOK, "").replace(KEEP, "").strip()
+    lead_reasoning(reply, keep)
     kind = "first" if empty else "keep" if show_block else "restore"
     return close(prompt, reply, call, "Scratchpad updated.", f"checklist:notes:{kind}")
 
@@ -167,7 +172,11 @@ def decision_task(row: dict, block: str, held_out: set, max_tokens: int, need_bl
     """A decision with the blocks in the scratchpad it was shown; (task, kind or why it was dropped).
 
     Kinds: call:fold / call:continue (a clear price-card plan, followed), open:raise / open:fold (a clear open-card
-    plan, followed), premium (a raise with QQ+, AK, 99-JJ or AQ-AJ before the flop), other."""
+    plan, followed), premium (a raise with QQ+, AK, 99-JJ or AQ-AJ before the flop), other.
+
+    With a PLAYBOOK block the playbook's own rules replace the open card (`playbook_rules.verdicts`): a reply that
+    breaks a rule is dropped, and one that follows a rule is kind open:raise / open:fold (rule A), flop bet (B),
+    reraise / reraise answer (D). Call decisions from real play are then kept when the reply works from the notes."""
     found = parts(row)
     if found is None:
         return None, "not clean"
@@ -175,6 +184,15 @@ def decision_task(row: dict, block: str, held_out: set, max_tokens: int, need_bl
     if call["name"] != SUBMIT or int(row.get("tokens_out") or 0) >= max_tokens:
         return None, "not a short action"
     action = arguments.get("action")
+    playbook = "PLAYBOOK" in block
+    rules = playbook_rules.verdicts(prompt, arguments) if playbook else []
+    if any(not followed for _, followed in rules):
+        return None, "against the playbook: " + ",".join(rule for rule, followed in rules if not followed)
+    if arguments.get("talk") and playbook:
+        return None, "talks"
+    if REPLACED and "PLAYBOOK" in prompt[1]["content"] and block not in prompt[1]["content"]:
+        if DROPPED_LINE_USE.search(json.dumps(reply)):
+            return None, "leans on a removed line"
     if need_block and REPLACED and REPLACED in prompt[1]["content"]:
         # the reply was written with an earlier wording of the block: show the current one, and drop replies that
         # lean on a line the current block no longer has
@@ -206,12 +224,19 @@ def decision_task(row: dict, block: str, held_out: set, max_tokens: int, need_bl
                 kind = "other"  # becomes "premium" below
             elif spot["hand"] == 1 and "(empty)" in prompt[1]["content"]:
                 kind = "first-hand call"
+            elif playbook and "CALL CHECKLIST" in prompt[1]["content"] and USES_NOTES.search(json.dumps(reply)):
+                pass  # the model already plays with the checklist: its own call decisions are targets
             else:
                 return None, "a call decision from real play after the first hand"
     if spot["street"] == "preflop":
         hand = preflop_class(spot["hole"])
         can_raise = "raise to" in rest
-        opening = open_card.card(prompt)
+        opening = None if playbook else open_card.card(prompt)
+        for rule, _ in rules:
+            if rule == "A":
+                kind = "open:raise" if action == "raise" else "open:fold"
+            elif rule == "D":
+                kind = "reraise" if action == "raise" else "reraise answer"
         if opening is not None:  # everyone has folded to this seat
             if action == "call":
                 return None, "limps"
@@ -224,6 +249,8 @@ def decision_task(row: dict, block: str, held_out: set, max_tokens: int, need_bl
         if hand in ("QQ+", "AK", "99-JJ", "AQ-AJ") and action == "raise" and kind == "other":
             kind = "premium"
     else:
+        if ("B", True) in rules:
+            kind = "flop bet"
         made = postflop_class(spot["hole"], spot["board"])
         if made in ("monster", "trips") and action == "fold":
             return None, "folds a very strong hand"
@@ -247,8 +274,13 @@ def main() -> None:
     parser.add_argument("--project", default="vals-hackathon")
     parser.add_argument("--policy-deployment-id", required=True, nargs="+", help="the model's deployments in real games, infer_...")
     parser.add_argument("--since", required=True, nargs="+", help="for each policy deployment: spans from this ISO time on (UTC)")
-    parser.add_argument("--notes-deployment-id", required=True, help="the deployment asked with --notes-file")
-    parser.add_argument("--notes-since", required=True, help="notes spans from this ISO time on (UTC)")
+    parser.add_argument("--notes-deployment-id", help="the deployment asked call decisions with --notes-file; without it "
+                        "(playbook runs) the call decisions come from the policy deployments' own play")
+    parser.add_argument("--notes-since", help="notes spans from this ISO time on (UTC)")
+    parser.add_argument("--call-decisions", type=int, default=300, help="call decisions of each answer, when taken from play")
+    parser.add_argument("--flop-bets", type=int, default=200, help="playbook rule B: flop bets after raising")
+    parser.add_argument("--reraises", type=int, default=150, help="playbook rule D: re-raises of an open")
+    parser.add_argument("--reraise-answers", type=int, default=100, help="playbook rule D: answers to a re-raise of our raise")
     parser.add_argument("--spots", type=Path, required=True, help="harness/runs/price_spots.jsonl, to leave out held-out matches")
     parser.add_argument("--dataset", required=True)
     parser.add_argument("--notes-file", type=Path, default=NOTES, help="the text to keep at the top of the scratchpad")
@@ -280,7 +312,9 @@ def main() -> None:
         policy += fetch_spans(client, deployment, args.project, since)
     rng.shuffle(policy)
     first, later = [], []
-    pools: dict[str, list[Task]] = {"other": [], "open:raise": [], "open:fold": [], "premium": [], "first-hand call": []}
+    pools: dict[str, list[Task]] = {"other": [], "open:raise": [], "open:fold": [], "premium": [], "first-hand call": [],
+                                    "flop bet": [], "reraise": [], "reraise answer": []}
+    calls: dict[str, list[Task]] = {"call:fold": [], "call:continue": []}
     for row in policy:
         if '"update_scratchpad"' in (row.get("output") or ""):
             show = rng.random() >= args.restore_share
@@ -293,8 +327,11 @@ def main() -> None:
                 stats[f"ordinary decision dropped: {kind}"] += 1
             elif kind in pools:
                 pools[kind].append(task)
+            elif kind in calls and not args.notes_deployment_id:
+                calls[kind].append(task)
     caps = {"other": args.other_decisions, "open:raise": args.open_raises, "open:fold": args.open_folds, "premium": args.premium_raises,
-            "first-hand call": args.first_hand_calls}
+            "first-hand call": args.first_hand_calls, "flop bet": args.flop_bets, "reraise": args.reraises,
+            "reraise answer": args.reraise_answers}
     other = [task for kind, tasks in pools.items() for task in tasks[: caps[kind]]]
     for kind, tasks in pools.items():
         stats[f"kept {kind}"] = min(len(tasks), caps[kind])
@@ -302,14 +339,15 @@ def main() -> None:
     for task in notes_turns:
         stats[task.env_params["source"]] += 1
 
-    calls: dict[str, list[Task]] = {"call:fold": [], "call:continue": []}
-    for row in fetch_spans(client, args.notes_deployment_id, args.project, args.notes_since):
+    for row in fetch_spans(client, args.notes_deployment_id, args.project, args.notes_since) if args.notes_deployment_id else []:
         task, kind = decision_task(row, block, held_out, args.max_tokens, need_block=True)
         if task is None:
             stats[f"call decision dropped: {kind}"] += 1
         elif kind in calls:
             calls[kind].append(task)
     size = min(len(v) for v in calls.values())
+    if not args.notes_deployment_id:
+        size = min(size, args.call_decisions)
     call_tasks = rng.sample(calls["call:fold"], size) + rng.sample(calls["call:continue"], size)
 
     tasks = notes_turns + call_tasks + other

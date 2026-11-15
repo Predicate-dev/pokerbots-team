@@ -131,8 +131,40 @@ def games(folder: Path) -> dict[int, dict]:
         out[int(log["session_info"]["seed"])] = {
             "place": log["ranking"]["places"][seat], "busted": log["eliminated_on_hand"].get(seat) is not None,
             "decisions": len(mine), "failed": sum(bool(a["model_response"].get("format_error")) for a in mine),
-        }
+        } | habits(log, seat)
     return out
+
+
+def habits(log: dict, seat: str) -> dict:
+    """The habits that go with finishing in the top three at today's tables (see the arena behaviour analysis):
+    small pots taken without a showdown, raising when first in, betting the flop after raising, and no big loss."""
+    h = dict.fromkeys(("chances", "raises", "limps", "uncontested", "flop_spots", "flop_bets", "faced_open", "reraises", "big_loss"), 0)
+    for hand in log["hands"]:
+        if seat not in hand["starting_state"]:
+            continue
+        acts = hand["actions"]
+        pre = [a for a in acts if a["street"] == "preflop"]
+        first = next((a for a in pre if a["player"] == seat), None)
+        opened = False
+        if first is not None:
+            before = pre[: pre.index(first)]
+            kind = first["action"]["type"]
+            if all(a["action"]["type"] == "fold" for a in before) and first.get("call_amount", 0) > 0:
+                h["chances"] += 1
+                h["raises"] += kind == "raise"
+                h["limps"] += kind == "call"
+                opened = kind == "raise"
+            elif sum(a["action"]["type"] == "raise" for a in before) == 1:
+                h["faced_open"] += 1
+                h["reraises"] += kind == "raise"
+        flop = [a for a in acts if a["street"] == "flop" and a["player"] == seat]
+        if opened and flop and flop[0].get("call_amount", 0) == 0:
+            h["flop_spots"] += 1
+            h["flop_bets"] += flop[0]["action"]["type"] in ("bet", "raise")
+        change = hand["ending_stacks"].get(seat, 0) - hand["starting_state"][seat]["starting_stack"]
+        h["uncontested"] += change > 0 and not hand.get("showdown")
+        h["big_loss"] = max(h["big_loss"], -change)
+    return h
 
 
 def notes_line(folder: Path) -> dict | None:
@@ -169,8 +201,17 @@ def games_summary(data: dict[int, dict]) -> str:
     g = list(data.values())
     mean, low, high = bootstrap([POINTS[x["place"]] for x in g])
     places = [sum(x["place"] == p for x in g) for p in range(1, 7)]
-    return (f"{len(g)} games | {mean:+.3f} rating pts per game [{low:+.2f}, {high:+.2f}] | places 1st-6th {places} | "
+    top3 = 100 * sum(places[:3]) / len(g)
+    line = (f"{len(g)} games | {mean:+.3f} rating pts per game [{low:+.2f}, {high:+.2f}] | top three {top3:.0f}% | places 1st-6th {places} | "
             f"busted {sum(x['busted'] for x in g)} | failed decisions {sum(x['failed'] for x in g)}/{sum(x['decisions'] for x in g)}")
+    if "chances" not in g[0]:
+        return line
+    total = {k: sum(x[k] for x in g) for k in ("chances", "raises", "limps", "uncontested", "flop_spots", "flop_bets", "faced_open", "reraises")}
+    return line + (
+        f"\n  habits           : first-in raises {total['raises'] / len(g):.1f} per game ({100 * total['raises'] / max(1, total['chances']):.0f}% of chances; "
+        f"just calls {100 * total['limps'] / max(1, total['chances']):.0f}%) | pots won without a showdown {total['uncontested'] / len(g):.1f} per game | "
+        f"bets the flop after raising {total['flop_bets']}/{total['flop_spots']} | re-raises an open {total['reraises']}/{total['faced_open']} | "
+        f"games with a 21+ chip loss {100 * sum(x['big_loss'] >= 21 for x in g) / len(g):.0f}%")
 
 
 def show(name: str, data: dict) -> None:
@@ -210,8 +251,9 @@ def report(args: argparse.Namespace) -> None:
         mean, low, high = bootstrap(diffs)
         better = sum(candidate["games"][s]["place"] < baseline["games"][s]["place"] for s in seeds)
         worse = sum(candidate["games"][s]["place"] > baseline["games"][s]["place"] for s in seeds)
+        t_mean, t_low, t_high = bootstrap([(candidate["games"][s]["place"] <= 3) - (baseline["games"][s]["place"] <= 3) for s in seeds], 100)
         print(f"  games            : {mean:+.3f} rating pts per game [{low:+.2f}, {high:+.2f}] over {len(seeds)} shared deals | "
-              f"better {better}, same {len(seeds) - better - worse}, worse {worse}")
+              f"better {better}, same {len(seeds) - better - worse}, worse {worse} | top-three rate {t_mean:+.0f} points [{t_low:+.0f}, {t_high:+.0f}]")
         verdicts.append(("games", low, high))
     for label, low, high in verdicts:
         print(f"  -> {label}: {'better' if low > 0 else 'worse' if high < 0 else 'no clear difference'}")

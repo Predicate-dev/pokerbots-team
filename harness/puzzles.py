@@ -29,6 +29,7 @@ import json
 import os
 import random
 from collections import Counter
+from collections.abc import Sequence
 from itertools import combinations
 from pathlib import Path
 
@@ -48,10 +49,17 @@ def _cards(codes: list[str]) -> tuple[Card, ...]:
     return tuple(next(iter(Card.parse(code))) for code in codes)
 
 
-def equity(hole: list[str], villains: list[list[str]], board: list[str], seed: int) -> float:
+def equity(
+    hole: list[str],
+    villains: list[list[str]],
+    board: list[str],
+    seed: int | str,
+    *,
+    dead: Sequence[str] = (),
+) -> float:
     """The seat's share of the pot at showdown against these exact hands, over the rest of the board."""
-    used = set(hole) | {c for v in villains for c in v} | set(board)
-    deck = [repr(card) for card in Deck.STANDARD if repr(card) not in used]
+    used = set(hole) | {c for v in villains for c in v} | set(board) | set(dead)
+    deck = [card for card in Deck.STANDARD if repr(card) not in used]
     need = 5 - len(board)
     if need == 0:
         runouts = [()]
@@ -60,10 +68,10 @@ def equity(hole: list[str], villains: list[list[str]], board: list[str], seed: i
     else:
         rng = random.Random(seed)
         runouts = [tuple(rng.sample(deck, need)) for _ in range(SAMPLES)]
-    mine, theirs = _cards(hole), [_cards(v) for v in villains]
+    mine, theirs, community = _cards(hole), [_cards(v) for v in villains], _cards(board)
     share = 0.0
     for extra in runouts:
-        full = _cards([*board, *extra])
+        full = (*community, *extra)
         best = StandardHighHand.from_game(mine, full)
         others = [StandardHighHand.from_game(v, full) for v in theirs]
         top = max(others)

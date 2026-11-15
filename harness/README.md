@@ -116,3 +116,28 @@ With `table_talk` on:
   Event tables (scratchpad on) deliver the same recap in the after-hand cleanup turn instead, so they're unchanged.
 
 Talk changes only what models see: with identical decisions, chips and actions match a talk-off table exactly.
+
+## Pluribus puzzles
+
+Run these commands from `harness/` with a checkout of the PHH dataset. The build is local. Scoring uses an AC2
+API key in the environment and an existing deployment. [PHH dataset](https://github.com/uoftcprg/phh-dataset)
+
+```bash
+uv run python build_pluribus_puzzles.py --source /path/to/phh-dataset/data/pluribus
+uv run python puzzles.py run --puzzles runs/pluribus_puzzles.jsonl --model vals-hackathon/opsd-tight-s5 --limit 400
+```
+
+The bank includes all seats by default. To score only decisions taken by Pluribus, build with
+`--entry Pluribus --out runs/pluribus_only_puzzles.jsonl` and pass that file to `puzzles.py run`.
+Every river decision facing a bet appears once. A decision facing a call for 40% or more of the remaining stack
+is tagged `stack_call`, including on the river.
+
+Each prompt uses the event's opening hand and shows the actor's cards and public betting through that decision.
+Dividing the original chips by 50 preserves pot odds and effective stack sizes. Raise ranges in the prompt use
+whole-chip amounts to match the tool schema.
+
+The answer compares the call's price to checkdown equity against the exact hands still in at that moment.
+The label uses chips already in the pot plus the call, with no future bets or placement margin. The
+`closes_action` and `villains` fields identify spots with action still pending or multiple opponents.
+These labels measure a model's choice on a cash-game reference set. Keep the scores separate from arena
+placement and from the arena puzzle bank, which uses a different label rule.

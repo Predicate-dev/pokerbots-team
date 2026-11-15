@@ -67,6 +67,7 @@ async def one_game(
     talk_mode: str = "normal",
     lineup: str = "house",
     field_model: str = "",
+    field_thinking: bool = True,
 ) -> dict:
     params = with_preset({"preset": "event", "seed": seed, "submit_fields": ["action", "amount"]})
     if hands:
@@ -111,6 +112,8 @@ async def one_game(
                 fields = [m.strip() for m in field_model.split(",") if m.strip()]
                 theirs_model = fields[(seed + seat) % len(fields)]
                 theirs = params | {"model_label": theirs_model}
+                if not field_thinking:  # about ten times fewer tokens per opponent decision, so games finish sooner
+                    theirs = {k: v for k, v in theirs.items() if k != "chat_template_kwargs"} | {"thinking": False}
                 players.append(
                     ModelSeat(name, relay_completion(client, GATEWAY_URL, key, theirs), rules, model=theirs_model,
                               cleanup_complete=_no_cleanup)
@@ -199,7 +202,7 @@ async def run(args: argparse.Namespace) -> list[dict]:
             async with gate:
                 log = await one_game(
                     client, key, model, seed, args.hands, guidance=guidance, talk_mode=args.talk_mode,
-                    lineup=args.lineup, field_model=args.field_model,
+                    lineup=args.lineup, field_model=args.field_model, field_thinking=not args.field_no_thinking,
                 )
             row = summarize(log) | {"arm": arm, "talk_mode": args.talk_mode, "deployment": model}
             log["experiment"] = {"arm": arm, "talk_mode": args.talk_mode, "deployment": model}
@@ -268,6 +271,8 @@ def main() -> None:
     parser.add_argument("--field-model", default="vals-hackathon/entry",
                         help="deployment(s) that play the other teams' seats with --lineup arena, comma-separated to spread "
                              "the load (default: base Qwen)")
+    parser.add_argument("--field-no-thinking", action="store_true",
+                        help="field seats answer without thinking: a much faster check against weaker opponents")
     args = parser.parse_args()
     if args.games < 1 or args.parallel < 1 or (args.hands is not None and args.hands < 1):
         parser.error("--games, --parallel and --hands must be positive")

@@ -136,6 +136,22 @@ async def play_session(
         raise ValueError(f"duplicate players at one table: {names}")
     by_seat = dict(enumerate(players))
     start = rules.starting_stack
+    # Keep the original rules-level training API working alongside the newer explicit keyword arguments used by
+    # `training.table_start`.  The latter wins whenever a caller supplies it.
+    if initial_stacks is None and rules.starting_stacks is not None:
+        if rules.reset_stacks or len(rules.starting_stacks) != len(players) or min(rules.starting_stacks) < 0:
+            raise ValueError("starting_stacks needs carried stacks and one stack of 0 or more per seat")
+        if sum(s > 0 for s in rules.starting_stacks) < 2:
+            raise ValueError("starting_stacks needs at least two seats with chips")
+        initial_stacks = dict(enumerate(rules.starting_stacks))
+    if first_hand == 1:
+        first_hand = rules.first_hand
+    if last_hand is None and rules.play_hands is not None:
+        last_hand = min(rules.total_hands, first_hand + rules.play_hands - 1)
+    if button_seat is None:
+        button_seat = rules.button_seat
+    if not 1 <= first_hand <= rules.total_hands or (last_hand is not None and last_hand < first_hand):
+        raise ValueError(f"first_hand {first_hand} and last_hand {last_hand} must fit in {rules.total_hands} hands")
     stacks = dict.fromkeys(by_seat, start) if initial_stacks is None else {s: initial_stacks[s] for s in by_seat}
     begin = dict(stacks)  # each seat's stack when this log starts
     net = dict.fromkeys(by_seat, 0)
@@ -145,7 +161,9 @@ async def play_session(
     eliminated: dict[str, int] = {by_seat[s].name: first_hand - 1 for s in by_seat if begin[s] == 0}
     start_time = datetime.now(UTC).isoformat()
     button = max(by_seat) if button_seat is None else button_seat
-    if button_seat is None and stacks[button] == 0:  # a seat that starts busted can't hold the button
+    if button_seat is not None and button not in by_seat:
+        raise ValueError(f"button_seat {button} is not a seat at this table")
+    if stacks[button] == 0:  # a seat that starts busted can't hold the button
         button = _next_live_seat(button, stacks)
     official = rules.ranking is not None
     # Multi-hand talk tables without the after-hand turn: each seat's next hand opens with what it missed of the last.

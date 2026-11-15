@@ -95,6 +95,38 @@ def target_arguments(logged: dict) -> dict:
     return {"action": kind, "amount": logged["amount"]} if kind in ("bet", "raise") else {"action": kind}
 
 
+def replay_players(hand: dict) -> list[ReplaySeat]:
+    by_seat = {seat: [] for seat in range(RULES.seats)}
+    for action in hand["actions"]:
+        by_seat[action["seat"]].append(action)
+    return [ReplaySeat(f"seat{seat}", moves) for seat, moves in by_seat.items()]
+
+
+async def play_replay_hand(match: dict, hand: dict, players: list) -> tuple[dict, str]:
+    """Run one public hand and verify the deal, action sequence, board and stacks."""
+    stacks = dict.fromkeys(range(RULES.seats), 0) | {p["seat"]: p["starting_stack"] for p in hand["players"]}
+    log = await play_session(
+        f"clone-{match['id']}", int(match["seed"]), players, RULES,
+        initial_stacks=stacks, first_hand=hand["hand_number"], last_hand=hand["hand_number"],
+        button_seat=hand["button_seat"],
+    )
+    played = log["hands"][0]
+    dealt = {state["seat"]: state["hole_cards"] for state in played["starting_state"].values()}
+    if dealt != {p["seat"]: p["hole_cards"] for p in hand["players"]}:
+        return {}, "cards differ"
+    ours = [(a["seat"], a["action"]["type"], a["action"].get("amount")) for a in played["actions"]]
+    theirs = [(a["seat"], a["action"], a["amount"] if a["action"] in ("bet", "raise") else None) for a in hand["actions"]]
+    if ours != theirs:
+        return {}, "actions differ"
+    if list(played.get("final_board") or []) != list(hand["board"]):
+        return {}, "board differs"
+    recorded_stacks = dict.fromkeys(played["ending_stacks"], 0)
+    recorded_stacks.update({f"seat{seat}": stack for seat, stack in hand["stacks_after"].items()})
+    if played["ending_stacks"] != recorded_stacks:
+        return {}, "stacks differ"
+    return played, ""
+
+
 async def replay_hand(
     match: dict, hand: dict, seat: int, scratchpad: str = "", need_decision: bool = True,
 ) -> tuple[list[dict], str, list[dict] | None, dict | None]:

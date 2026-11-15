@@ -101,14 +101,15 @@ def cleanup_task(example: dict, index: int) -> Task:
     )
 
 
-def task(example: dict, index: int) -> Task:
+def task(example: dict, index: int, say: str = "") -> Task:
     if example.get("kind") == "cleanup":
         return cleanup_task(example, index)
+    arguments = example["action"] | {"say": say} if say else example["action"]
     conversation = items(example["messages"]) + [
         {"type": "reasoning", "content": brief_reason(example)},
         {"type": "message", "role": "assistant", "content": BETWEEN},
         {"type": "function_call", "call_id": f"call-target-{index}", "name": "submit_action",
-         "arguments": json.dumps(example["action"])},
+         "arguments": json.dumps(arguments)},
         # The tool's reply closes the assistant turn. Without anything after the call, the first models kept writing
         # past it (repeated calls, stray tags) and 10% of their decisions were unreadable.
         {"type": "function_call_output", "call_id": f"call-target-{index}", "output": APPLIED.format(move=_move(example))},
@@ -130,14 +131,9 @@ def build(examples: list[dict], max_fold_share: float, seed: int = 0, talk: bool
         folds = rng.sample(folds, min(len(folds), int(len(rest) * max_fold_share / (1 - max_fold_share))))
     chosen = folds + rest
     rng.shuffle(chosen)
-    if talk:
-        for e in chosen:
-            if e.get("kind") == "cleanup":
-                continue
-            line = talk_line(e, rng)
-            if line:
-                e["action"] = e["action"] | {"say": line}
-    return [task(e, i) for i, e in enumerate(chosen)]
+    return [
+        task(e, i, talk_line(e, rng) if talk and e.get("kind") != "cleanup" else "") for i, e in enumerate(chosen)
+    ]
 
 
 def main() -> None:

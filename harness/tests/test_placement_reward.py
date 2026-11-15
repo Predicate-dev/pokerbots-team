@@ -11,8 +11,8 @@ from test_server import TASK, fake_relay, play
 
 from poker_harness.ev import label_ev
 from poker_harness.game import play_session
-from poker_harness.grading import FAILURE_SCORE, REWARD_OFFSET, GradingError, check_grader_params, grade_log
-from poker_harness.placement import DEFAULT_NOISE_BB, place_value
+from poker_harness.grading import FAILURE_SCORE, PLACEMENT_SCALE, REWARD_OFFSET, GradingError, check_grader_params, grade_log
+from poker_harness.placement import DEFAULT_NOISE_BB, place_value, rating_weights
 from poker_harness.prompts import TableRules
 from poker_harness.server import create_app
 
@@ -47,7 +47,7 @@ async def test_a_hand_is_scored_on_the_change_in_place_value() -> None:
     reply = grade_log(log, ["seat0"], placement(3))
     before = place_value(start, "seat0", 4, NOISE)
     after = place_value(log["final_stacks"], "seat0", 3, NOISE)
-    assert reply["score"] == pytest.approx(REWARD_OFFSET + 10 * (after - before))
+    assert reply["score"] == pytest.approx(REWARD_OFFSET + PLACEMENT_SCALE * (after - before))
     assert reply["artifacts"]["place_before"] == pytest.approx(before)
     assert reply["artifacts"]["place_after"] == pytest.approx(after)
     assert reply["artifacts"]["reward"] == "placement" and "Place value" in reply["reasoning"]
@@ -65,15 +65,18 @@ async def test_the_same_chips_matter_more_on_the_last_hand_than_early() -> None:
     early_score = grade_log(early, ["seat0"], placement(28))["score"]
     late_score = grade_log(late, ["seat0"], placement(0))["score"]
     assert REWARD_OFFSET - 0.1 < early_score < REWARD_OFFSET  # one chip on hand 2 barely moves the finishing place
-    assert late_score == pytest.approx(REWARD_OFFSET - 10 * 0.5)  # on the last hand it is the gap to last place
+    equal_stacks_value = sum(rating_weights(4)) / 4
+    assert late_score == pytest.approx(REWARD_OFFSET - PLACEMENT_SCALE * equal_stacks_value)
 
 
 async def test_folding_while_others_lose_chips_can_gain_places_on_the_last_hand() -> None:
     log = await one_hand((200, 200, 200, 200), 30, seat0=FOLD)  # the other three call each other down
     assert log["final_stacks"]["seat0"] == 199
-    below = sum(stack < 199 for stack in log["final_stacks"].values())
+    ahead = sum(stack > 199 for stack in log["final_stacks"].values())
     reply = grade_log(log, ["seat0"], placement(0))
-    assert below >= 1 and reply["score"] == pytest.approx(REWARD_OFFSET + 10 * (below / 3 - 0.5))
+    assert ahead <= 2
+    expected = REWARD_OFFSET + PLACEMENT_SCALE * (rating_weights(4)[ahead] - sum(rating_weights(4)) / 4)
+    assert reply["score"] == pytest.approx(expected)
     assert grade_log(log, ["seat0"])["score"] < REWARD_OFFSET  # on chips the same fold is a small loss
 
 
@@ -98,11 +101,11 @@ def bust_log(hero_end: int) -> dict:
 def test_losing_the_last_chips_costs_more_than_the_chips_before_them() -> None:
     scores = [grade_log(bust_log(end), ["seat0"], placement(10))["score"] for end in (300, 200, 100, 2, 0)]
     assert scores == sorted(scores, reverse=True) and scores[0] == REWARD_OFFSET
-    assert scores[-1] == pytest.approx(REWARD_OFFSET - 10 * 0.5)  # from an even table to certain last
+    assert scores[-1] == pytest.approx(REWARD_OFFSET - PLACEMENT_SCALE * sum(rating_weights(4)) / 4)
     assert scores[-2] > scores[-1]  # two chips and a chair still beat being out
 
 
-async def test_an_all_in_before_the_river_weighs_both_outcomes_by_equity() -> None:
+async def test_an_all_in_before_the_river_weighs_wins_ties_and_losses() -> None:
     start = {"seat0": 100, "seat1": 100, "seat2": 400}
     log = await one_hand(tuple(start.values()), 25, seat0=bot(shove), seat1=bot(shove), seat2=FOLD)
     log = label_ev(log, {"seat0"}, variants=1, runouts=64, redraw=False)
@@ -113,10 +116,17 @@ async def test_an_all_in_before_the_river_weighs_both_outcomes_by_equity() -> No
     dead = 400 - log["final_stacks"]["seat2"]  # the blind the folder left in the pot, if it posted one
     wins = place_value({"seat0": 200 + dead, "seat1": 0, "seat2": 400 - dead}, "seat0", 5, NOISE, start)
     loses = place_value({"seat0": 0, "seat1": 200 + dead, "seat2": 400 - dead}, "seat0", 5, NOISE, start)
-    expected = label["ev_share"] * wins + (1 - label["ev_share"]) * loses
+    first_live = next(n for n in log["hands"][0]["starting_state"] if n != "seat2")
+    split = {"seat0": 100 + dead // 2, "seat1": 100 + dead // 2, "seat2": 400 - dead}
+    split[first_live] += dead % 2
+    tie_value = place_value(split, "seat0", 5, NOISE, start)
+    win, tie, loss = label["heads_up_outcomes"]
+    expected = win * wins + tie * tie_value + loss * loses
     assert loses == 0.0 and reply["artifacts"]["place_after"] == pytest.approx(expected)
     realized = place_value(log["final_stacks"], "seat0", 5, NOISE, start)
     assert reply["artifacts"]["place_after"] != pytest.approx(realized)  # not just the cards that came
+    label.update(heads_up_outcomes=[0.0, 1.0, 0.0], ev_share=0.5)
+    assert grade_log(log, ["seat0"], placement(5))["artifacts"]["place_after"] == pytest.approx(tie_value)
 
 
 def test_a_format_error_still_scores_zero() -> None:
@@ -176,5 +186,6 @@ async def test_a_mid_game_task_plays_and_grades_through_the_server(tmp_path: Pat
     assert grading["status"] == "completed"
     artifacts = reply["artifacts"]
     assert artifacts["reward"] == "placement" and 0 < artifacts["place_before"] < 1
-    assert reply["score"] == pytest.approx(REWARD_OFFSET + 10 * (artifacts["place_after"] - artifacts["place_before"]))
+    change = artifacts["place_after"] - artifacts["place_before"]
+    assert reply["score"] == pytest.approx(REWARD_OFFSET + PLACEMENT_SCALE * change)
     assert FAILURE_SCORE < reply["score"] <= 11

@@ -25,6 +25,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from ac2.sdk import Client, TrainingCustomHarnessConfig
+from ac2.sdk.model import ModelConfig
 from ac2.sdk.run_config import (
     EvalConfig,
     EvalDatasetConfig,
@@ -65,7 +66,7 @@ def run_config(args: argparse.Namespace, name: str) -> RunConfig:
     )
     launch = _set(tensorboard_enabled=args.tensorboard or None)  # AC2 places the run; teams can't pick a cluster
     return RunConfig(
-        model=args.model,
+        model=ModelConfig(checkpoint=args.from_checkpoint) if args.from_checkpoint else args.model,
         name=name,
         description=f"GRPO on {args.prefix}-train through the self-hosted poker harness, harness-side grading.",
         tags={"benchmark": "pokerbots", "method": "grpo", "dataset": f"{args.prefix}-train"},
@@ -106,7 +107,9 @@ def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--project", default="vals-hackathon")
     p.add_argument("--prefix", default="pokerbots", help="dataset prefix from rl/make_dataset.py")
-    p.add_argument("--model", default="Qwen/Qwen3.6-35B-A3B", help="base model (arena entries are this model or fine-tunes of it)")
+    start = p.add_mutually_exclusive_group()
+    start.add_argument("--model", default="Qwen/Qwen3.6-35B-A3B", help="catalog model to start from")
+    start.add_argument("--from-checkpoint", help="initialize from an AC2 checkpoint (ckpt_...)")
     p.add_argument("--dry-run", action="store_true", help="print the settings and configuration, submit nothing")
     g = p.add_argument_group("set by default (the GRPO recipe); change them with these flags")
     g.add_argument("--steps", type=int, default=60, help="training steps (default 60)")
@@ -143,6 +146,8 @@ def explicit_settings(p: argparse.ArgumentParser, args: argparse.Namespace) -> d
     skip = {"project", "dry_run", "help"} | (
         {"eval_every", "eval_dataset", "eval_concurrency", "eval_replicas"} if args.no_eval else set()
     )
+    if args.from_checkpoint:
+        skip.add("model")
     return {
         action.dest: getattr(args, action.dest)
         for action in p._actions  # noqa: SLF001

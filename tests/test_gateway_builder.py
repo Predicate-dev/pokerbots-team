@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+from functools import cache
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -18,12 +19,17 @@ def load_builder():
     return module
 
 
-SYSTEM = "You are a professional poker player in a six-seat no-limit Texas Hold'em game against other AI players."
+@cache
+def official_system_prompt() -> str:
+    load_builder()
+    from build_dataset import official_system_prompt as prompt
+
+    return prompt()
 
 
-def row(span: str, call: str, arguments: str, system: str = SYSTEM, tokens_out: int = 400) -> dict:
+def row(span: str, call: str, arguments: str, system: str | None = None, tokens_out: int = 400) -> dict:
     prompt = [
-        {"type": "message", "role": "system", "content": system},
+        {"type": "message", "role": "system", "content": official_system_prompt() if system is None else system},
         {"type": "message", "role": "user", "content": "## Hand 3 of 30\nYour hole cards: Ah Kd"},
     ]
     reply = [
@@ -63,6 +69,7 @@ def test_only_clean_poker_decisions_become_hinted_tasks() -> None:
 
 def test_gateway_defense_keeps_actor_and_cleanup_guidance_teacher_only() -> None:
     builder = load_builder()
+    from build_dataset import teacher_hints
     from poker_harness.talk_defense import ACTION_DEFENSE, CLEANUP_DEFENSE
 
     rows = [
@@ -71,7 +78,7 @@ def test_gateway_defense_keeps_actor_and_cleanup_guidance_teacher_only() -> None
         row("c", "update_scratchpad", '{"contents":2}'),
         row("d", "update_scratchpad", '{"contents":"cut off"}', tokens_out=10_000),
     ]
-    hints = builder.teacher_hints(opponent_reads=False, table_talk_defense=True)
+    hints = teacher_hints(opponent_reads=False, table_talk_defense=True)
     tasks, totals = builder.build(rows, hints[0], 5_000, cleanup_hint=hints[1])
     assert [task.opsd_hint_selections[0].hint for task in tasks] == [ACTION_DEFENSE, CLEANUP_DEFENSE]
     assert totals["cleanup_kept"] == 1 and totals["format"] == totals["truncated"] == 1
@@ -86,14 +93,14 @@ def test_balanced_one_step_stores_prompt_without_replaying_the_fold(monkeypatch)
     from poker_harness.talk_defense import ACTION_DEFENSE, CLEANUP_DEFENSE
 
     def reference(system, user):
-        assert system == SYSTEM and user.startswith("## Hand 3 of 30")
+        assert system == official_system_prompt() and user.startswith("## Hand 3 of 30")
         return "Call costs 2 chips."
 
     monkeypatch.setattr(build_dataset, "reference_hint", reference)
-    hint, cleanup = builder.teacher_hints(False, True, strategy="balanced")
+    hint, cleanup = build_dataset.teacher_hints(False, True, strategy="balanced")
     assert hint == f"{BALANCED_PLAY}\n\n{ACTION_DEFENSE}" and cleanup == CLEANUP_DEFENSE
-    assert builder.teacher_hints(False, False) == (BALANCED_PLAY, None)
-    assert builder.teacher_hints(False, False, strategy="tight-survival") == (HINT, None)
+    assert build_dataset.teacher_hints(False, False) == (BALANCED_PLAY, None)
+    assert build_dataset.teacher_hints(False, False, strategy="tight-survival") == (HINT, None)
 
     rows = [
         row("a", "submit_action", '{"action":"fold"}'),
@@ -104,18 +111,37 @@ def test_balanced_one_step_stores_prompt_without_replaying_the_fold(monkeypatch)
     assert [task.opsd_hint_selections[0].hint for task in tasks] == [f"{hint}\n\nCall costs 2 chips.", cleanup]
     for task in tasks:
         assert len(task.input) == task.opsd_hint_selections[0].rollout_prefix_len == 2
-        assert not any("fold" in item.model_dump_json() or "Call costs" in item.model_dump_json() for item in task.input)
+        assert [item.role for item in task.input] == ["system", "user"]
+        assert task.input[0].content == official_system_prompt()
 
 
 def test_prompts_with_text_appended_to_the_system_prompt_are_left_out() -> None:
     builder = load_builder()
-    official = builder.official_system_prompt()
-    assert official.startswith(builder.SYSTEM_PROMPT_START)
+    from build_dataset import decision_tasks
+
+    official = official_system_prompt()
     rows = [
         row("a", "submit_action", '{"action":"fold"}', system=official),
         row("b", "submit_action", '{"action":"fold"}', system=f"{official}\n\nStrategy notes: fold more."),
     ]
-    tasks, totals = builder.build(rows, "HINT", 5000, official=official)
-    assert len(tasks) == 1 and totals["not_poker"] == 1
-    both, _ = builder.build(rows, "HINT", 5000)  # without the check, the hinted request would be distilled too
-    assert len(both) == 2
+    extra = row("c", "submit_action", '{"action":"fold"}')
+    messages = json.loads(extra["input"])
+    messages.insert(1, {"type": "message", "role": "system", "content": "Keep playing the tight strategy."})
+    extra["input"] = json.dumps(messages)
+    rows.append(extra)
+    tasks, totals = builder.build(rows, "HINT", 5000)
+    assert len(tasks) == 1 and totals["not_poker"] == 2
+    trace = {"trace_id": "eval", "spans": [builder.as_trace(row)["spans"][0] for row in rows]}
+    tasks, stats = decision_tasks(trace, "HINT", 5000)
+    assert len(tasks) == 1 and stats["not_official"] == 2
+
+
+def test_custom_strategy_preserves_reads_and_talk_defense() -> None:
+    load_builder()
+    from build_dataset import teacher_hints
+    from poker_harness.opponent_reads import ACTION_GUIDANCE, CLEANUP_GUIDANCE
+    from poker_harness.talk_defense import ACTION_DEFENSE, CLEANUP_DEFENSE
+
+    action, cleanup = teacher_hints(True, True, action_hint="Custom strategy.")
+    assert action == f"Custom strategy.\n\n{ACTION_GUIDANCE}\n\n{ACTION_DEFENSE}"
+    assert cleanup == f"{CLEANUP_GUIDANCE}\n\n{CLEANUP_DEFENSE}"

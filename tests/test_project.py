@@ -135,7 +135,7 @@ def test_summary_pairs_by_deal() -> None:
 
 
 def test_opsd_builder_makes_one_hinted_task_per_clean_decision() -> None:
-    system = Message(role="system", content="rules")
+    system = Message(role="system", content=build_dataset.official_system_prompt())
     user = Message(role="user", content="state")
     good = [Reasoning(content="think"), FunctionCall(call_id="c1", name="submit_action", arguments='{"action":"fold"}')]
     bad = [Message(role="assistant", content="no tool call")]
@@ -152,7 +152,7 @@ def test_opsd_builder_makes_one_hinted_task_per_clean_decision() -> None:
         }
 
     tasks, stats = build_dataset.decision_tasks({"trace_id": "t", "spans": [span(1, good), span(2, bad)]}, "hint", 100)
-    assert stats == {"decisions": 2, "kept": 1, "cleanup": 0, "format": 1, "truncated": 0}
+    assert stats == {"decisions": 2, "kept": 1, "cleanup": 0, "format": 1, "truncated": 0, "not_official": 0}
     (task,) = tasks
     (selection,) = task.opsd_hint_selections
     assert len(task.input) == 4 and selection.rollout_prefix_len == 2
@@ -164,7 +164,10 @@ def test_opsd_builder_makes_one_hinted_task_per_clean_decision() -> None:
 
 def test_opponent_read_opsd_keeps_only_valid_cleanup_with_its_own_hint() -> None:
     def span(start: int, arguments: str, tokens: int) -> dict:
-        prompt = [Message(role="system", content="rules"), Message(role="user", content="cleanup")]
+        prompt = [
+            Message(role="system", content=build_dataset.official_system_prompt()),
+            Message(role="user", content="cleanup"),
+        ]
         reply = [FunctionCall(call_id="c1", name="update_scratchpad", arguments=arguments)]
         return {
             "name": "get_completion",
@@ -186,7 +189,9 @@ def test_opponent_read_opsd_keeps_only_valid_cleanup_with_its_own_hint() -> None
     tasks, stats = build_dataset.decision_tasks(
         trace, "action guidance", 100, cleanup_hint="cleanup guidance", cleanup_max_tokens=400,
     )
-    assert stats == {"decisions": 3, "kept": 1, "cleanup": 3, "format": 1, "truncated": 1, "cleanup_kept": 1}
+    assert stats == {
+        "decisions": 3, "kept": 1, "cleanup": 3, "format": 1, "truncated": 1, "not_official": 0, "cleanup_kept": 1,
+    }
     assert tasks[0].opsd_hint_selections[0].hint == "cleanup guidance"
     assert tasks[0].input[-1].name == "update_scratchpad"
     assert build_dataset.decision_tasks(trace, "action guidance", 100)[0] == []
@@ -209,6 +214,16 @@ def test_training_configs_send_only_explicit_settings() -> None:
     tuned = grpo.run_config(grpo.parser().parse_args(["--lr", "1e-6", "--max-response-len", "10000"]), "n").to_json()
     assert tuned["experiment_cfg"]["trainer"]["learning_rate"] == 1e-6
     assert tuned["experiment_cfg"]["rollout"]["max_response_len"] == 10000
+    prepared = grpo.parser().parse_args([
+        "--prefix", "pokerbots-real-rating",
+        "--from-checkpoint", "ckpt_a118fbb9ac36",
+        "--steps", "6", "--checkpoint-every", "2", "--eval-every", "2",
+    ])
+    checkpoint_run = grpo.run_config(prepared, "n").to_json()
+    assert "ckpt_a118fbb9ac36" in json.dumps(checkpoint_run)
+    assert "pokerbots-real-rating-train" in json.dumps(checkpoint_run)
+    assert "pokerbots-real-rating-select" in json.dumps(checkpoint_run)
+    assert checkpoint_run["experiment_cfg"]["step"]["checkpoint_interval"] == 2
 
     opsd = opsd_train.run_config(opsd_train.parser().parse_args(["--dataset", "d"]), "n").to_json()
     text = json.dumps(opsd, default=str)

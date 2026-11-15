@@ -130,3 +130,38 @@ async def test_the_command_line_tool_writes_one_line_per_snapshot_and_skips_what
 
     cut_snapshots.main([str(tmp_path / "one_hand.json"), "--out", str(tmp_path / "none.jsonl")])
     assert not (tmp_path / "none.jsonl").exists() and "no snapshots" in capsys.readouterr().out
+
+
+async def test_public_replays_can_omit_busted_seats_and_keep_the_prior_ledger(tmp_path: Path) -> None:
+    rules = TableRules(**{**OFFICIAL.__dict__, "seats": 6, "starting_stacks": (0, 240, 240, 240, 240, 240),
+                          "play_hands": 3})
+    log = await play_session("public", 21, seats(6, rules), rules)
+    hands = []
+    for hand in log["hands"]:
+        hands.append({
+            "hand_number": hand["hand_number"],
+            "button_seat": hand["button_seat"],
+            "players": list(hand["starting_state"].values()),
+            "actions": [
+                {"seat": move["seat"], "action": move["action"]["type"], "amount": move["action"].get("amount")}
+                for move in hand["actions"]
+            ],
+            "board": hand["final_board"],
+            "stacks_after": {
+                state["seat"]: hand["ending_stacks"][name] for name, state in hand["starting_state"].items()
+            },
+        })
+    match = {
+        "id": "public", "schema": "vals-arena.match/1", "kind": "ranked", "seed": 21, "format": {"total_hands": 30},
+        "seats": [{"seat": i, "entry": {"id": f"entry{i}"}} for i in range(6)], "hands": hands,
+    }
+    path = tmp_path / "arena.json"
+    path.write_text(json.dumps(match))
+    spots, stats = await cut_snapshots.cut_arena([path, path], "entry1", min_hand=2, min_log_hands=1)
+    assert stats["games"] == 1 and len(spots) == 2
+    assert spots[0]["starting_stacks"][0] == 0 and spots[0]["policy_seats"] == [1]
+    assert spots[0]["starting_ledger"]["hand"] == 1 and spots[0]["hands_left"] == 28
+    hands[0]["stacks_after"][1] += 1
+    path.write_text(json.dumps(match))
+    spots, stats = await cut_snapshots.cut_arena([path], "entry1", min_hand=2, min_log_hands=1)
+    assert not spots and stats["skipped: stacks differ"] == 1

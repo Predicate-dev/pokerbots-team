@@ -25,6 +25,7 @@ import argparse
 import json
 import random
 import sys
+from functools import cache
 from pathlib import Path
 
 from ac2.runtime import FunctionCall, HintedTask, HintMutation, HintSelection, Item, Message, Tool
@@ -34,8 +35,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "harness" / "src"))
 from hint import HINT, ROLLOUT_MODES, SEPARATOR, STRATEGIES  # noqa: E402
 from poker_harness.balanced_play import BALANCED_PLAY  # noqa: E402
+from poker_harness.completions import table_rules, with_preset  # noqa: E402
 from poker_harness.opponent_reads import ACTION_GUIDANCE, CLEANUP_GUIDANCE, PLACEMENT_GUIDANCE  # noqa: E402
 from poker_harness.preflop_reference import reference_hint  # noqa: E402
+from poker_harness.prompts import system_prompt  # noqa: E402
 from poker_harness.talk_defense import ACTION_DEFENSE, CLEANUP_DEFENSE  # noqa: E402
 
 ITEMS = TypeAdapter(list[Item])
@@ -49,11 +52,13 @@ TOOLS = [Tool.model_validate(tool).model_dump() for tool in json.loads((Path(__f
 
 
 def teacher_hints(
-    opponent_reads: bool, table_talk_defense: bool, *, strategy: str | None = None,
+    opponent_reads: bool, table_talk_defense: bool, *, strategy: str | None = None, action_hint: str | None = None,
 ) -> tuple[str, str | None]:
     """Return teacher-only guidance for action and cleanup turns."""
     action, cleanup = [], []
-    if strategy == "tight-survival":
+    if action_hint is not None:
+        action.append(action_hint)
+    elif strategy == "tight-survival":
         action.append(HINT)
     elif strategy == "balanced" or not (opponent_reads or table_talk_defense):
         action.append(BALANCED_PLAY)
@@ -73,6 +78,33 @@ def add_strategy_args(parser: argparse.ArgumentParser) -> None:
                         help="default: balanced; select balanced explicitly to combine with reads or talk defense")
     parser.add_argument("--rollout-mode", choices=ROLLOUT_MODES, default="offline",
                         help="store replayed replies for offline or prompt prefixes for one_step")
+    parser.add_argument("--hint-file", type=Path, help="replace the strategy text with this file's contents")
+
+
+def selected_hints(args: argparse.Namespace, parser: argparse.ArgumentParser) -> tuple[str, str | None]:
+    custom = args.hint_file.read_text().strip() if args.hint_file else None
+    if custom == "":
+        parser.error("--hint-file must contain a strategy")
+    return teacher_hints(args.opponent_reads, args.table_talk_defense, strategy=args.strategy, action_hint=custom)
+
+
+@cache
+def official_system_prompt() -> str:
+    return system_prompt(table_rules(with_preset({"preset": "event"})))
+
+
+def is_official_prompt(raw: str) -> bool:
+    try:
+        messages = json.loads(raw)
+        first = messages[0]
+    except (TypeError, ValueError, IndexError, KeyError):
+        return False
+    return (
+        isinstance(first, dict)
+        and first.get("role") == "system"
+        and first.get("content") == official_system_prompt()
+        and not any(isinstance(item, dict) and item.get("role") in ("system", "developer") for item in messages[1:])
+    )
 
 
 def decision_tasks(
@@ -84,7 +116,7 @@ def decision_tasks(
         (s for s in trace["spans"] if s["name"] == "get_completion" and s["status"] == "OK"),
         key=lambda s: s["start_time"],
     )
-    stats = {"decisions": len(spans), "kept": 0, "cleanup": 0, "format": 0, "truncated": 0}
+    stats = {"decisions": len(spans), "kept": 0, "cleanup": 0, "format": 0, "truncated": 0, "not_official": 0}
     if cleanup_hint is not None:
         stats["cleanup_kept"] = 0
     balanced = hint.startswith(BALANCED_PLAY)
@@ -92,6 +124,9 @@ def decision_tasks(
         stats["preflop_reference_kept"] = 0
     tasks = []
     for span in spans:
+        if not is_official_prompt(span["input"]):
+            stats["not_official"] += 1
+            continue
         prompt = ITEMS.validate_json(span["input"])
         reply = ITEMS.validate_json(span["output"])
         calls = [item for item in reply if isinstance(item, FunctionCall)]
@@ -165,13 +200,13 @@ def main() -> None:
     args = parser.parse_args()
     if args.max_tokens < 1 or args.cleanup_max_tokens < 1:
         parser.error("token caps must be positive")
+    hint, cleanup_hint = selected_hints(args, parser)
 
     path = args.traces or Path(f"traces/{args.eval}.jsonl")
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
         Client(project=args.project).traces.download(args.eval, path)
     tasks, totals = [], {"decisions": 0, "kept": 0, "cleanup": 0, "format": 0, "truncated": 0}
-    hint, cleanup_hint = teacher_hints(args.opponent_reads, args.table_talk_defense, strategy=args.strategy)
     if cleanup_hint is not None:
         totals["cleanup_kept"] = 0
     with path.open() as lines:

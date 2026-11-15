@@ -10,6 +10,7 @@ from pathlib import Path
 from statistics import fmean
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "harness" / "src"))
+from poker_harness.placement import rating_points  # noqa: E402
 from poker_harness.preflop import PreflopAction, opportunities, record_folds  # noqa: E402
 
 _NON_POLICY = ("fallback", "coerced", "format_error", "afk", "timed_out", "token_cap", "sat_out", "error", "scripted")
@@ -44,6 +45,7 @@ def audit(directory: Path, org: str) -> list[dict]:
                 "checkpoint": identity[3],
                 "first_finished_at": match["finished_at"],
                 "places": Counter(),
+                "rating_points_total": 0.0,
                 "busts": 0,
                 "decisions": 0,
                 "forced_or_coerced": 0,
@@ -56,6 +58,7 @@ def audit(directory: Path, org: str) -> list[dict]:
         version["last_finished_at"] = match["finished_at"]
         result = next(result for result in match["results"] if result["seat"] == hero)
         version["places"][result["place"]] += 1
+        version["rating_points_total"] += rating_points(result["place"], len(match["seats"]))
         version["busts"] += result.get("eliminated_on_hand") is not None
         for hand in match["hands"]:
             seats = {row["seat"] for row in hand["players"]}
@@ -80,14 +83,16 @@ def audit(directory: Path, org: str) -> list[dict]:
                     version["forced_or_coerced"] += 1
                 elif action["to_call"] > 0:
                     record_folds(version["priced_by_street"], (action["street"],), action["action"])
-    return [
-        version
-        | {
-            "games": sum(version["places"].values()),
+    report = []
+    for version in versions.values():
+        games = sum(version["places"].values())
+        points = version.pop("rating_points_total")
+        report.append(version | {
+            "games": games,
             "mean_place": round(fmean(version["places"].elements()), 3),
-        }
-        for version in versions.values()
-    ]
+            "rating_points_per_game": round(points / games, 3),
+        })
+    return report
 
 
 def main() -> None:

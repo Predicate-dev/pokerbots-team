@@ -91,8 +91,9 @@ builds datasets that use them.
 | `env_params.button_seat` | The button on the first hand played |
 | `env_params.initial_scratchpad` | The scratchpad the task starts with: a string (policy seats) or `{seat: string}` |
 | `env_params.opponent_seats` | `{seat: spec}`: `"scripted:maniac"`, `"scripted:nit"`, `"scripted:calling_station"`, `"scripted:random"`, or `{model, persona, api, reasoning_effort, thinking}` (persona text is appended to that seat's system prompt) |
-| `grader_params.reward` | `"ev"` (default) or `"placement"`: the finishing place with a chip term, for multi-hand games |
-| `grader_params.chip_weight` | Placement only: the chip term's share, 0-1 (default 0.25) |
+| `grader_params.reward` | `"ev"` (default) or `"placement"`, which uses the equal-rated OpenSkill placement curve |
+| `grader_params.hands_left` | For mid-game placement tasks, estimate finishing rating over the remaining hands |
+| `grader_params.chip_weight` | For terminal placement tasks, the chip term's share, 0-1 (default 0.25) |
 | `grader_params.ev_unit_bb` | EV only: big blinds per reward point (default 1); use K for a K-hand task |
 
 ## Table talk

@@ -343,8 +343,8 @@ async def test_an_endgame_task_shows_the_true_hand_and_scores_the_finishing_plac
     finish = placement(full, ["seat0"])
     in_play = sum(chips > 0 for chips in ENDGAME["initial_stacks"])  # seats that start at 0 aren't places
     assert finish.seats == in_play < 6
-    rank_share = (in_play - finish.place) / (in_play - 1)
-    expected = 1 + 10 * ((1 - DEFAULT_CHIP_WEIGHT) * rank_share + DEFAULT_CHIP_WEIGHT * finish.chip_share)
+    rank_value = finish.rating_value
+    expected = 1 + 10 * ((1 - DEFAULT_CHIP_WEIGHT) * rank_value + DEFAULT_CHIP_WEIGHT * finish.chip_share)
     assert reply["score"] == pytest.approx(expected) and 1.0 <= reply["score"] <= 11.0
     assert reply["artifacts"]["reward"] == "placement" and reply["artifacts"]["hands"] == 2
     assert reply["artifacts"]["place"] == placements(full)["seat0"] and reply["artifacts"]["seats"] == in_play
@@ -400,14 +400,15 @@ def test_placement_rewards_rank_first_and_chips_within_a_rank() -> None:
 
 
 
-def test_seats_busted_before_the_task_dont_count_as_places() -> None:
+def test_prior_eliminations_protect_the_ranks_still_in_play() -> None:
     six = [f"seat{i}" for i in range(6)]
     # Three seats start the log at 0; seat0 busts first of the other three, so it finished last of those in play.
     log = finished({"seat0": 0, "seat1": 600, "seat2": 600, **dict.fromkeys(six[3:], 0)}, {"seat0": 1, **dict.fromkeys(six[3:], 0)})
     log["session_info"]["starting_stacks"] = [400, 400, 400, 0, 0, 0]
     score = grade_log(log, ["seat0"], {"reward": "placement"})
     assert score["artifacts"]["place"] == 3 and score["artifacts"]["seats"] == 3
-    assert score["score"] == pytest.approx(1.0)  # last of the seats in play, with no chips
+    assert score["artifacts"]["rating_value"] > 0.5  # third of six is worth more than last overall
+    assert score["score"] > 1.0
 
 def test_a_format_error_scores_zero_in_every_mode() -> None:
     log = finished({"seat0": 1200, **{f"seat{i}": 0 for i in range(1, 6)}}, {f"seat{i}": 2 for i in range(1, 6)})

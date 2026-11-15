@@ -105,3 +105,17 @@ def test_balanced_one_step_stores_prompt_without_replaying_the_fold(monkeypatch)
     for task in tasks:
         assert len(task.input) == task.opsd_hint_selections[0].rollout_prefix_len == 2
         assert not any("fold" in item.model_dump_json() or "Call costs" in item.model_dump_json() for item in task.input)
+
+
+def test_prompts_with_text_appended_to_the_system_prompt_are_left_out() -> None:
+    builder = load_builder()
+    official = builder.official_system_prompt()
+    assert official.startswith(builder.SYSTEM_PROMPT_START)
+    rows = [
+        row("a", "submit_action", '{"action":"fold"}', system=official),
+        row("b", "submit_action", '{"action":"fold"}', system=f"{official}\n\nStrategy notes: fold more."),
+    ]
+    tasks, totals = builder.build(rows, "HINT", 5000, official=official)
+    assert len(tasks) == 1 and totals["not_poker"] == 1
+    both, _ = builder.build(rows, "HINT", 5000)  # without the check, the hinted request would be distilled too
+    assert len(both) == 2

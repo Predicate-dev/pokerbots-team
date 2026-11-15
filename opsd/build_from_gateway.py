@@ -61,16 +61,31 @@ def fetch_spans(client: Client, deployment_id: str, project: str, since: str | N
             return rows
 
 
-def is_poker_prompt(row: dict) -> bool:
+def official_system_prompt() -> str:
+    """The event's system prompt, from the harness, so prompts with anything appended (a previewed hint, an
+    ablation's guidance, a persona) can be told apart from the official one."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "harness" / "src"))
+    from poker_harness.completions import table_rules, with_preset
+    from poker_harness.prompts import system_prompt
+
+    return system_prompt(table_rules(with_preset({"preset": "event"})))
+
+
+def is_poker_prompt(row: dict, official: str | None = None) -> bool:
+    """A harness poker prompt. With `official`, only the unmodified event prompt counts. `score_local.py`'s
+    ablations and `--guidance-file` append text to the system prompt of the same deployment, and those requests are
+    in its gateway log too: a model that could see a hint was not playing under the official rules, and distilling
+    from its replies would train the student with the hint in view."""
     try:
         first = json.loads(row["input"])[0]
     except (TypeError, ValueError, IndexError, KeyError):
         return False
-    return (
-        isinstance(first, dict)
-        and first.get("role") == "system"
-        and str(first.get("content", "")).startswith(SYSTEM_PROMPT_START)
-    )
+    if not isinstance(first, dict) or first.get("role") != "system":
+        return False
+    content = str(first.get("content", ""))
+    if not content.startswith(SYSTEM_PROMPT_START):
+        return False
+    return official is None or content == official
 
 
 def as_trace(row: dict) -> dict:
@@ -92,7 +107,7 @@ def as_trace(row: dict) -> dict:
 
 def build(
     rows: list[dict], hint: str, max_tokens: int, *, cleanup_hint: str | None = None, cleanup_max_tokens: int = 10_000,
-    rollout_mode: str = "offline",
+    rollout_mode: str = "offline", official: str | None = None,
 ) -> tuple[list, dict[str, int]]:
     totals = {"spans": len(rows), "not_poker": 0, "decisions": 0, "kept": 0, "cleanup": 0, "format": 0, "truncated": 0}
     if cleanup_hint is not None:
@@ -104,7 +119,7 @@ def build(
         if key in seen:
             continue
         seen.add(key)
-        if not is_poker_prompt(row) or not row.get("output"):
+        if not is_poker_prompt(row, official) or not row.get("output"):
             totals["not_poker"] += 1
             continue
         try:
@@ -133,6 +148,10 @@ def main() -> None:
     parser.add_argument("--table-talk-defense", action="store_true",
                         help="teach the model to ignore chatter when acting and updating notes")
     add_strategy_args(parser)
+    parser.add_argument("--hint-file", type=Path,
+                        help="text file with the action hint; replaces --strategy's text (e.g. opsd/hint_balanced.txt)")
+    parser.add_argument("--include-modified-prompts", action="store_true",
+                        help="also keep requests whose system prompt had text appended (default: official prompt only)")
     parser.add_argument("--upload", action="store_true", help="create the dataset on AC2 (default: print only)")
     args = parser.parse_args()
     if args.max_tokens < 1 or args.cleanup_max_tokens < 1:
@@ -141,9 +160,11 @@ def main() -> None:
     client = Client(project=args.project)
     rows = fetch_spans(client, args.deployment_id, args.project, args.since)
     hint, cleanup_hint = teacher_hints(args.opponent_reads, args.table_talk_defense, strategy=args.strategy)
+    if args.hint_file:
+        hint = args.hint_file.read_text().strip()
     tasks, totals = build(
         rows, hint, args.max_tokens, cleanup_hint=cleanup_hint, cleanup_max_tokens=args.cleanup_max_tokens,
-        rollout_mode=args.rollout_mode,
+        rollout_mode=args.rollout_mode, official=None if args.include_modified_prompts else official_system_prompt(),
     )
     random.Random(0).shuffle(tasks)
     print(json.dumps(totals | {"tasks": len(tasks)}))

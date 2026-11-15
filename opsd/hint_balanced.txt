@@ -1,0 +1,25 @@
+Strategy notes for this game:
+- You are rated on finishing order. Finishing last costs far more than winning earns, and second to last is the
+  next worst. So your first job is not to be the first player out, and not to be the smallest stack at the end.
+  Only the order counts, never the margin.
+- While all six players still have chips, never put your whole stack at risk without QQ, KK, AA or AK. Fold to
+  all-ins otherwise, even with good hands. Against a player who moves all-in constantly, add TT, JJ and AQ.
+- You still have to win chips: a stack that only folds bleeds away and finishes last at a table where nobody busts.
+  Play about three hands in ten. When nobody has raised, open-raise to about three big blinds with any pair, any two
+  cards ten or higher, any suited ace, and suited connectors down to 76, and add more hands on the button and in the
+  cutoff. Do not limp in.
+- Facing a normal raise of up to about four big blinds, continue with pairs, AK down to AT, KQ, KJ suited and suited
+  connectors when the price is small. Fold the rest.
+- After the flop, if you raised before it, bet about half the pot on most flops against one or two players. Bet
+  about two thirds of the pot for value with top pair or better. Give up missed hands when an opponent bets, and do
+  not chase draws against large bets.
+- Do not fold a strong made hand to a small bet: with two pair or better, call or raise unless the bet is for most
+  of your stack and the board makes a better hand very likely. Bet your straights, flushes and sets for value
+  instead of checking them down. With a flush draw or an open-ended straight draw, call when the price is small (a
+  bet of up to about a third of the pot) and fold it only to large bets.
+- As players bust, loosen up. Once two players are out you cannot finish last, so play a normal aggressive game and
+  go after chips to move up. When you are comfortably ahead of the players still in near the end, protect the lead.
+- Read opponents from their betting. Do not bluff a player who calls everything: bet your good hands for value
+  instead. Raise the blinds of a player who folds everything. When a tight player raises big, believe them.
+- Keep your reasoning short and decisive, then call submit_action exactly once. Never mention your own cards in
+  table talk.

@@ -44,6 +44,17 @@ def with_preflop_reference(complete: Complete) -> Complete:
     return guided
 
 
+FIELD = "field"
+# How many of the five other seats were other teams' bots at this team's last 25 ranked tables (arena replays,
+# 2026-11-14 about 17:20 PT): (seats, games). The remaining seats are house-bot imitations.
+ARENA_FIELD_SEATS = ((0, 5), (1, 3), (3, 5), (4, 10), (5, 2))
+
+
+async def _no_cleanup(messages: list) -> Completion:
+    """Field seats skip the after-hand scratchpad turn: it would double the model calls for seats we don't score."""
+    return Completion(text="")
+
+
 async def one_game(
     client: httpx.AsyncClient,
     key: str,
@@ -54,6 +65,7 @@ async def one_game(
     guidance: str = "",
     talk_mode: str = "normal",
     lineup: str = "house",
+    field_model: str = "",
 ) -> dict:
     params = with_preset({"preset": "event", "seed": seed, "submit_fields": ["action", "amount"]})
     if hands:
@@ -66,6 +78,10 @@ async def one_game(
     styles = rng.sample(HOUSE_STYLES, rules.seats - 1)
     if lineup == "mixed":
         styles[-2:] = rng.sample(ARCHETYPES, 2)
+        rng.shuffle(styles)
+    if lineup == "arena":  # some seats are other teams' bots: `field_model` under the official prompt
+        field_seats = rng.choices(*zip(*ARENA_FIELD_SEATS, strict=True))[0]
+        styles[:field_seats] = [FIELD] * field_seats
         rng.shuffle(styles)
     label = params | {"model_label": model}
     players: list = []
@@ -89,7 +105,14 @@ async def one_game(
             styles_by_seat[name] = "model"
         else:
             style = styles.pop()
-            if style in HOUSE_STYLES:
+            if style == FIELD:
+                theirs = params | {"model_label": field_model}
+                players.append(
+                    ModelSeat(name, relay_completion(client, GATEWAY_URL, key, theirs), rules, model=field_model,
+                              cleanup_complete=_no_cleanup)
+                )
+                styles_by_seat[name] = "field"
+            elif style in HOUSE_STYLES:
                 players.append(HouseStylePlayer(name, style, seed, talk_mode=talk_mode))
                 styles_by_seat[name] = style.removeprefix("house_")
             else:
@@ -157,6 +180,8 @@ async def run(args: argparse.Namespace) -> list[dict]:
         arms = {"control": "", "balanced_play": BALANCED_PLAY}
     elif args.compare_model:
         arms = {"control": "", "candidate": ""}
+    elif args.guidance_file:  # preview a strategy hint: the text is appended to the model's system prompt
+        arms = {"hinted": args.guidance_file.read_text().strip()}
     folders = {arm: args.out / arm if len(arms) > 1 else args.out for arm in arms}
     for folder in folders.values():
         folder.mkdir(parents=True, exist_ok=True)
@@ -167,7 +192,7 @@ async def run(args: argparse.Namespace) -> list[dict]:
             async with gate:
                 log = await one_game(
                     client, key, model, seed, args.hands, guidance=guidance, talk_mode=args.talk_mode,
-                    lineup=args.lineup,
+                    lineup=args.lineup, field_model=args.field_model,
                 )
             row = summarize(log) | {"arm": arm, "talk_mode": args.talk_mode, "deployment": model}
             log["experiment"] = {"arm": arm, "talk_mode": args.talk_mode, "deployment": model}
@@ -193,11 +218,20 @@ def compare_arms(rows: list[dict], treatment_arm: str = "opponent_reads") -> dic
     }
 
 
+def rating_points(place: int, seats: int = 6) -> float:
+    """The direction and relative size of the arena rating's change for one finish at a table of equally rated
+    seats. The arena rates with OpenSkill's Plackett-Luce model, whose update for the seat finishing in place r is
+    proportional to 1 - sum(1 / (seats + 1 - q) for q in 1..r): at six seats +0.83, +0.63, +0.38, +0.05, -0.45,
+    -1.45. Last place costs far more than first place earns, so this, not mean place, is what to compare on."""
+    return 1 - sum(1 / (seats + 1 - q) for q in range(1, place + 1))
+
+
 def print_summary(label: str, rows: list[dict]) -> None:
     n = len(rows)
     decisions = sum(r["decisions"] for r in rows)
     print(
-        f"\n{label}: {n} games | mean place {sum(r['place'] for r in rows) / n:.2f} of 6 | "
+        f"\n{label}: {n} games | rating points per game {sum(rating_points(r['place']) for r in rows) / n:+.3f} | "
+        f"mean place {sum(r['place'] for r in rows) / n:.2f} of 6 | "
         f"busted {sum(r['busted_on'] is not None for r in rows)}/{n} | places {sorted(r['place'] for r in rows)} | "
         f"mean chips {sum(r['chips'] for r in rows) / n:.0f} | failed decisions {sum(r['failed'] for r in rows)}/{decisions} | "
         f"cleanup updated {sum(r['cleanup_updated'] for r in rows)}/{sum(r['cleanup_turns'] for r in rows)}"
@@ -224,9 +258,14 @@ def main() -> None:
     ablations.add_argument("--balanced-play-ablation", action="store_true",
                            help="compare the official prompt with balanced strategy guidance before training")
     ablations.add_argument("--compare-model", help="baseline deployment to pair against --model on the official prompt")
+    ablations.add_argument("--guidance-file", type=Path,
+                           help="text appended to the model's system prompt, to preview a hint before training on it")
     parser.add_argument("--talk-mode", choices=TALK_MODES, default="normal", help="scripted opponents' table talk")
-    parser.add_argument("--lineup", choices=("house", "mixed"), default="house",
-                        help="mixed replaces two house imitations with generic scripted opponents")
+    parser.add_argument("--lineup", choices=("house", "mixed", "arena"), default="house",
+                        help="mixed replaces two house imitations with generic scripted opponents; arena seats "
+                             "--field-model in as many seats as other teams' bots took at recent arena tables")
+    parser.add_argument("--field-model", default="vals-hackathon/entry",
+                        help="deployment that plays the other teams' seats with --lineup arena (default: base Qwen)")
     args = parser.parse_args()
     if args.games < 1 or args.parallel < 1 or (args.hands is not None and args.hands < 1):
         parser.error("--games, --parallel and --hands must be positive")

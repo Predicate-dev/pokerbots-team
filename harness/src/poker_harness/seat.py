@@ -23,8 +23,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from .engine import Decision, DecisionContext
-
+from .engine import Decision, DecisionContext, LegalActions
 from .prompts import (
     SUBMIT_ACTION,
     UPDATE_SCRATCHPAD,
@@ -50,10 +49,8 @@ def _tool_name(call: dict[str, Any]) -> str:
     return str(call.get("function", {}).get("name", ""))
 
 
-def invalid_action(decision: Decision, ctx: DecisionContext) -> str | None:
-    """Why `decision` is not a legal action as given (`rules.strict_actions`), or None. Bet and raise are one action
-    under two names, a call with nothing to call is a check and a fold that could check is applied as a check."""
-    legal = ctx.legal
+def invalid_action(decision: Decision, legal: LegalActions) -> str | None:
+    """Why `decision` is invalid under the strict event rules, or None."""
     if decision.type in ("bet", "raise"):
         if legal.raise_type is None:
             return f"{decision.type} is not legal here"
@@ -219,7 +216,7 @@ class ModelSeat:
             decision, parse_error = parse_decision(reply.text, self.rules.table_talk)
         error = error or parse_error
         if not error and self.rules.strict_actions:
-            error = invalid_action(decision, ctx)
+            error = invalid_action(decision, ctx.legal)
         response: dict[str, Any] = {
             "model_name": model,
             "provider": model.split("/", 1)[0],

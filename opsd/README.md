@@ -224,6 +224,27 @@ To collect opening traces from an existing teacher deployment, add
 `opsd/build_price_dataset.py`. Use `--hint --balance` on the collection step. The builder leaves out held-out
 spots and checks that a hinted reply follows the card with a legal small raise or fold.
 
+## Checklist and opponent notes
+
+Score the checklist and prior opponent actions together on an existing deployment. Use the same public replay
+directory that produced the call and opening spots.
+
+```bash
+uv run --project harness python opsd/price_run.py --model vals-hackathon/<deployment> \
+  --spots harness/runs/price_spots.jsonl --held-out --notes-file opsd/notes/checklist_and_guide.txt \
+  --opponent-replays arena_data --out harness/runs/calls-with-opponent-notes.jsonl
+```
+
+Hand 1 starts with an empty scratchpad. Later hands get the checklist, guide and counts of prior public betting
+actions by seat. The request keeps the official system prompt. Run again with the same notes file and without
+`--opponent-replays` for the fixed-checklist control, and compare the decisions with prior evidence. For SFT
+collection, use the training split by omitting `--held-out`. Keep the official system prompt and give
+`build_checklist_sft.py` the same notes file and the deployment ID and start time of the collection run.
+`rl/make_rated_notes_dataset.py --notes-file opsd/notes/checklist_and_guide.txt` adds the same prior betting
+counts to placement-scored puzzles. After rebuilding `rl/make_whole_hand_dataset.py`, use a fresh dataset prefix
+for upload so previous tasks cannot carry over. Its selection games now follow the same held-out split as the
+call and opening benchmarks.
+
 ## Terminal call teacher
 
 `build_terminal_teacher.py` checks heads-up all-ins and river calls that close the action against the arena replay

@@ -19,7 +19,6 @@ within held-out cells in which both actions were observed. This is an observatio
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import statistics
 import sys
@@ -27,16 +26,14 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "harness" / "src"))
 import open_card  # noqa: E402
 import price_card  # noqa: E402
+from poker_harness.replay_split import held_out  # noqa: E402
 from price_card import PLACE_POINTS, card, parse, spot_keys, stack_value  # noqa: E402
 
 BINS = [1, 60, 120, 180, 230, 320, 450, 700, 100_000]
 MIN_CELL = 8
-
-
-def held_out(match_id: str) -> bool:
-    return int(hashlib.sha1(match_id.encode()).hexdigest(), 16) % 6 == 0
 
 
 def value_table(replays: Path) -> dict[str, list[list[float]]]:

@@ -23,15 +23,10 @@ from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 from clone_from_replays import replay_hand
+from poker_harness.replay_split import held_out
 from puzzles import equity
-from replay_chips import stack_before
 
-SELECT_ONE_IN = 6  # the same held-out matches as rl/make_puzzle_dataset.py
 FORCED = ("fallback", "coerced", "format_error", "afk", "timed_out", "token_cap", "sat_out", "error", "scripted")
-
-
-def held_out(match_id: str) -> bool:
-    return int(hashlib.sha1(match_id.encode()).hexdigest(), 16) % SELECT_ONE_IN == 0
 
 
 async def spots(path: Path, min_share: float) -> list[dict]:
@@ -47,7 +42,7 @@ async def spots(path: Path, min_share: float) -> list[dict]:
             if not any(a["seat"] == seat and a["to_call"] > 0 for a in hand["actions"]):
                 continue
             try:
-                examples, problem, _, _ = await replay_hand(match, hand, seat)
+                examples, problem, _, played = await replay_hand(match, hand, seat)
             except Exception:  # noqa: BLE001 - a hand that can't be replayed is skipped
                 problem = "error"
             if problem:
@@ -59,7 +54,8 @@ async def spots(path: Path, min_share: float) -> list[dict]:
                 if to_call <= 0:
                     continue
                 took = example["action"]["action"]
-                stack = stack_before(hand["actions"][index])
+                applied = played["actions"][index]
+                stack = applied["stack_after"] - applied["chip_change"]
                 share = to_call / max(1, stack)
                 if share < min_share and example["street"] != "river":
                     continue
@@ -69,7 +65,8 @@ async def spots(path: Path, min_share: float) -> list[dict]:
                 if not villains:
                     continue
                 seed = int(hashlib.sha1(f"{match['id']}:{hand['hand_number']}:{seat}:{index}".encode()).hexdigest(), 16) & 0xFFFF
-                raises = [a for a in hand["actions"][:index] if a["action"] in ("bet", "raise") and a["seat"] != seat]
+                raises = [a for a in hand["actions"][:index] if a["action"] in ("bet", "raise")
+                          and a["seat"] != seat and a["street"] == example["street"]]
                 bettor = entries[raises[-1]["seat"]] if raises else None  # who made the bet the seat is facing
                 out.append({
                     "bettor": bettor["name"] if bettor else None, "bettor_kind": bettor["kind"] if bettor else None,

@@ -1,0 +1,21 @@
+CALL CHECKLIST (keep this block at the top of the notes, unchanged)
+1) Chip price = call / (pot + call).
+2) Need = chip price + place margin. Rank is by finishing place and busting early is the worst result:
+   call is most of my stack: +19 with 6 left, +17 with 5, +11 with 4, +4 with 3, +0 heads-up
+   call is about half my stack: +10 with 5-6 left, +5 with 4, +0 with 3 or fewer
+   smaller calls: +5 with 5-6 left, +2 otherwise
+3) Win% for my hand, from real results at these tables:
+   Preflop, facing all-in / facing a raise: QQ+ 80/71, 99-JJ 59/55, 22-88 43/40, AK 52/61, AQ-AJ 51/52, weaker ace 42/41, two cards ten or higher 41/42, other suited 36/35, other offsuit 31/30
+   Flop or turn, facing a bet: straight or better 85, three of a kind 78, two pair 62, overpair 60 (49 if the bet is half pot or more), top pair 50, lower pair 25, flush or open-ended draw 33, nothing 19
+   River, facing a bet under half pot / half pot or more: straight or better 92/71, three of a kind 72/46, two pair 74/20, top pair 40/29, lower pair 24/27, nothing 8/12
+4) Continue only if Win% is above Need. Otherwise fold. Do not override the comparison with a feeling.
+
+PLAYBOOK (keep this block under the checklist, unchanged)
+A) Small pots decide places, so I take them. When everyone has folded to me I raise to 5 or fold, never just call:
+   small blind or button: raise with any two cards
+   cutoff: raise with any pair, any ace, two cards ten or higher, or suited connected cards
+   earlier seats: raise only with 99 or better, ace-jack or better, or king-queen
+B) If I raised before the flop and it is checked to me on the flop, I bet half the pot once, with or without a hand. If that bet is called or raised and I have less than top pair, I stop putting chips in.
+C) One big loss is how sixth places happen. I never put more than 20 chips into a pot unless I hold two pair or better, an overpair, or (before the flop) QQ, KK, AA or ace-king. The checklist still has to say continue as well.
+D) Facing a raise before the flop with QQ, KK, AA, ace-king, JJ, TT, 99 or ace-queen, I re-raise to three times the raise instead of calling. If my own raise gets re-raised, I continue only with QQ, KK, AA or ace-king and fold everything else.
+E) I say nothing at the table.

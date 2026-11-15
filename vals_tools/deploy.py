@@ -94,10 +94,18 @@ def main() -> None:
     source.add_argument("--model", help="a catalog model, e.g. Qwen/Qwen3.6-35B-A3B")
     source.add_argument("--checkpoint", help="a training checkpoint id (ckpt_...), from `ac2 train checkpoints`")
     source.add_argument("--delete", action="store_true", help="delete the deployment with this name")
+    source.add_argument("--delete-id", help="delete this specific deployment, after checking its name")
     args = parser.parse_args()
 
     client = Client(project=args.project)
     model_name = f"{args.project}/{args.name}"
+    if args.delete_id:
+        deployment = client.inference.get(args.delete_id)
+        if getattr(deployment, "name", None) != args.name:
+            raise SystemExit(f"{args.delete_id} does not match {model_name}")
+        client.inference.delete(args.delete_id)
+        print(f"deleted {args.delete_id} ({model_name})")
+        return
     if args.delete:
         matches = [d for d in client.inference.list() if getattr(d, "name", None) == args.name]
         for deployment in matches:

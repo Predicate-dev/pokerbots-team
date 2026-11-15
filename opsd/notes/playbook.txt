@@ -1,0 +1,9 @@
+PLAYBOOK (keep this block under the checklist, unchanged)
+A) Small pots decide places, so I take them. When everyone has folded to me I raise to 5 or fold, never just call:
+   small blind or button: raise with any two cards
+   cutoff: raise with any pair, any ace, two cards ten or higher, or suited connected cards
+   earlier seats: raise only with 99 or better, ace-jack or better, or king-queen
+B) If I raised before the flop and it is checked to me on the flop, I bet half the pot once, with or without a hand. If that bet is called or raised and I have less than top pair, I stop putting chips in.
+C) One big loss is how sixth places happen. I never put more than 20 chips into a pot unless I hold two pair or better, an overpair, or (before the flop) QQ, KK, AA or ace-king. The checklist still has to say continue as well.
+D) Facing a raise before the flop with QQ, KK, AA, ace-king, JJ, TT, 99 or ace-queen, I re-raise to three times the raise instead of calling. If my own raise gets re-raised, I continue only with QQ, KK, AA or ace-king and fold everything else.
+E) I say nothing at the table.

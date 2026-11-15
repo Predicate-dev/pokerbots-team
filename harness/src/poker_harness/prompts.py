@@ -15,7 +15,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from .engine import Decision, DecisionContext
+from .engine import Decision, DecisionContext, LegalActions
 from .engine import parse_decision as parse_vals_decision
 
 
@@ -222,6 +222,18 @@ def _legal_line(ctx: DecisionContext) -> str:
     if legal.raise_type:
         options.append(f"{legal.raise_type} to {legal.min_raise_to}-{legal.max_raise_to}")
     return f"Legal actions: {', '.join(options)}"
+
+
+_LEGAL_LINE = re.compile(r"^Legal actions: (?:fold, call (\d+)|check)(?:, (bet|raise) to (\d+)-(\d+))?$", re.MULTILINE)
+
+
+def prompt_legal_actions(text: str) -> LegalActions | None:
+    """Recover the final legal-action line of an official decision prompt."""
+    matches = _LEGAL_LINE.findall(text)
+    if not matches:
+        return None
+    call, kind, low, high = matches[-1]
+    return LegalActions(bool(call), not call, int(call or 0), kind or None, int(low or 0), int(high or 0))
 
 
 def _state_lines(ctx: DecisionContext) -> list[str]:

@@ -24,6 +24,7 @@ import os
 import random
 import re
 import sys
+from collections import defaultdict
 from pathlib import Path
 
 import httpx
@@ -33,34 +34,90 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "harness" / "src"))
 import open_card  # noqa: E402
 from hint import SEPARATOR  # noqa: E402
 from poker_harness.completions import GATEWAY_URL, relay_completion, with_preset  # noqa: E402
-from poker_harness.prompts import talk_fields  # noqa: E402
+from poker_harness.opponent_reads import replay_betting_evidence  # noqa: E402
+from poker_harness.prompts import (  # noqa: E402
+    SUBMIT_ACTION,
+    parse_tool_call,
+    prompt_legal_actions,
+    talk_fields,
+)
+from poker_harness.seat import Completion, invalid_action  # noqa: E402
 from price_card import card, hint  # noqa: E402
 
-
 PAD = re.compile(r"<<<SCRATCHPAD\n(.*)\nSCRATCHPAD>>>\n(\d+)/(\d+) characters", re.DOTALL)
+SPOT_ID = re.compile(r"([A-Za-z0-9_-]+):([1-9]\d*):([0-5]):\d+")
 
 
-def with_notes(pad_message: str, notes: str) -> str:
-    """The scratchpad message with `notes` as the first block of the scratchpad (and the character count fixed)."""
+def with_notes(pad_message: str, notes: str, *, replace: bool = False) -> str:
+    """Put notes into the private message, respecting its character limit."""
     found = PAD.search(pad_message)
-    if not found or notes in found[1]:
+    if not found or (not replace and notes in found[1]):
         return pad_message
-    body = notes if found[1].strip() == "(empty)" else f"{notes}\n\n{found[1]}"[: int(found[3])]
-    return pad_message[: found.start()] + f"<<<SCRATCHPAD\n{body}\nSCRATCHPAD>>>\n{len(body)}/{found[3]} characters" + pad_message[found.end():]
+    prior = "" if replace or found[1].strip() == "(empty)" else found[1]
+    body = "\n\n".join(filter(None, (notes, prior)))[: int(found[3])]
+    return (pad_message[: found.start()] + f"<<<SCRATCHPAD\n{body or '(empty)'}\nSCRATCHPAD>>>\n"
+            f"{len(body)}/{found[3]} characters" + pad_message[found.end():])
 
 
-def gain(row: dict, c: dict, answer: str) -> float:
-    if answer != "continue" or row.get("equity") is None:
+def replay_notes(directory: Path, rows: list[dict]) -> dict[str, str]:
+    """Look up the reconstructed opponent notes for each selected decision."""
+    groups = defaultdict(dict)
+    notes = {}
+    for row in rows:
+        decision_id = row["id"]
+        coordinate = SPOT_ID.fullmatch(decision_id)
+        if not coordinate or int(coordinate[2]) != row["card"]["hand"]:
+            raise ValueError(f"{decision_id}: expected a replay decision ID matching the prompt's hand number")
+        if len(row["messages"]) < 2 or not PAD.search(row["messages"][1]["content"]):
+            raise ValueError(f"{decision_id}: expected the private scratchpad message in the replay prompt")
+        match_id, hand, seat = coordinate.groups()
+        if hand == "1":
+            notes[decision_id] = ""
+        else:
+            groups[match_id][decision_id] = (int(hand), int(seat))
+    for match_id, decisions in groups.items():
+        path = directory / f"{match_id}.json"
+        if not path.is_file():
+            raise ValueError(f"missing replay {path}; use the source replay directory for these decisions")
+        match = json.loads(path.read_text())
+        if match["id"] != match_id:
+            raise ValueError(f"{path}: replay ID does not match its filename")
+        by_position = replay_betting_evidence(match, decisions.values())
+        notes.update((decision_id, by_position[position]) for decision_id, position in decisions.items())
+    return notes
+
+
+def gain(row: dict, answer: str | None = None) -> float:
+    if (row["answer"] if answer is None else answer) != "continue" or row.get("equity") is None:
         return 0.0
+    c = row["card"]
     return row["equity"] * c["win_value"] + (1 - row["equity"]) * c["lose_value"] - c["fold_value"]
+
+
+def best_call_answer(row: dict) -> str:
+    return "continue" if gain(row, "continue") > 0 else "fold"
+
+
+def submitted_action(reply: Completion, prompt: str) -> tuple[str, dict]:
+    """Require the one legal tool submission used for teacher collection."""
+    if reply.truncated or len(reply.tool_calls) != 1 or reply.tool_calls[0]["function"]["name"] != SUBMIT_ACTION:
+        return "", {}
+    if not isinstance(reply.tool_arguments, (str, dict)):
+        return "", {}
+    decision, error = parse_tool_call(reply.tool_arguments)
+    legal = prompt_legal_actions(prompt)
+    if error or legal is None or invalid_action(decision, legal):
+        return "", {}
+    action = legal.raise_type if decision.type in ("bet", "raise") else decision.type
+    return action, {"action": action, "amount": decision.amount}
 
 
 def summarize(name: str, rows: list[dict]) -> str:
     if not rows:
         return f"  {name:28} none"
     n = len(rows)
-    points = sum(gain(r, r["card"], r["answer"]) for r in rows)
-    best = sum((r["answer"] == "continue") == (gain(r, r["card"], "continue") > 0) for r in rows)
+    points = sum(map(gain, rows))
+    best = sum(r["answer"] == best_call_answer(r) for r in rows)
     agree = sum(r["answer"] == r["card"]["plan"] for r in rows if r["card"]["plan"] != "close")
     clear = sum(r["card"]["plan"] != "close" for r in rows)
     return (f"  {name:28} n {n:4} | {1000 * points / n:+7.1f} rating points per 1000 | best answer {100 * best / n:3.0f}% | "
@@ -90,9 +147,15 @@ async def run(args: argparse.Namespace) -> None:
     rng.shuffle(rows)
     if args.limit:
         rows = rows[: args.limit]
+    if not rows:
+        raise SystemExit(f"no eligible {args.decision} decisions in {args.spots}")
     params = with_preset({"preset": "event", "seed": 0, "submit_fields": ["action", "amount"]})
     params["submit_fields"] = talk_fields(params["submit_fields"])
     notes = args.notes_file.read_text().strip() if args.notes_file else ""
+    try:
+        observed = replay_notes(args.opponent_replays, rows) if args.opponent_replays else None
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
     gate = asyncio.Semaphore(args.parallel)
     async with httpx.AsyncClient(timeout=httpx.Timeout(900.0, connect=30.0)) as client:
         complete = relay_completion(client, GATEWAY_URL, key, params | {"model_label": args.model})
@@ -101,31 +164,38 @@ async def run(args: argparse.Namespace) -> None:
             messages = [dict(m) for m in row["messages"]]
             if args.hint:
                 messages[0]["content"] = messages[0]["content"] + SEPARATOR + card_hint(row["card"])
-            if notes:  # the same decision with these notes already at the top of the seat's scratchpad
+            evidence = ""
+            if observed is not None:
+                evidence = observed[row["id"]]
+                scratchpad = "" if row["card"]["hand"] == 1 else "\n\n".join(filter(None, (notes, evidence)))
+                messages[1]["content"] = with_notes(messages[1]["content"], scratchpad, replace=True)
+            elif notes:
                 messages[1]["content"] = with_notes(messages[1]["content"], notes)
             async with gate:
                 try:
                     reply = await complete(messages)
-                    arguments = reply.tool_arguments
-                    parsed = json.loads(arguments) if isinstance(arguments, str) else (arguments or {})
-                    if reply.truncated or (opening and len(reply.tool_calls) != 1):
-                        parsed = {}
-                    action = str(parsed.get("action", ""))
-                    extra = {"reasoning": reply.reasoning, "text": reply.text, "out_tokens": reply.out_tokens, "calls": len(reply.tool_calls)}
                 except Exception as exc:  # noqa: BLE001
                     action, parsed, extra = "", {}, {"error": type(exc).__name__}
+                else:
+                    action, parsed = submitted_action(reply, messages[-1]["content"])
+                    extra = {"reasoning": reply.reasoning, "text": reply.text, "out_tokens": reply.out_tokens, "calls": len(reply.tool_calls)}
             if opening:
                 answer = open_card.answer(row["card"], parsed)
             else:
                 answer = "fold" if action == "fold" else "continue" if action in ("call", "raise", "bet") else "invalid"
-            return row | {"answer": answer, "action": action} | extra
+            context = {"has_opponent_evidence": bool(evidence)} if observed is not None else {}
+            return row | {"answer": answer, "action": action} | context | extra
 
         done = list(await asyncio.gather(*(one(r) for r in rows)))
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text("".join(json.dumps({k: v for k, v in r.items() if k != "messages"}) + "\n" for r in done))
+    if failures := sum("error" in row for row in done):
+        raise SystemExit(f"AC2 requests failed for {failures}/{len(done)} {args.decision} decisions")
     print(f"{args.model}{' with the card' if args.hint else ''}: {len(done)} {args.decision} decisions from "
           f"{'held-out' if args.held_out else 'training'} matches")
+    if observed is not None:
+        print(f"  prior opponent notes in {sum(r['has_opponent_evidence'] for r in done)}/{len(done)} prompts")
     if opening:
         clear = [r for r in done if r["card"]["clear"]]
         print(f"  small raises {sum(r['answer'] == 'raise' for r in done)}/{len(done)} | "
@@ -150,6 +220,8 @@ def main() -> None:
     parser.add_argument("--held-out", action="store_true", help="the held-out matches (default: the training matches)")
     parser.add_argument("--hint", action="store_true", help="append each decision's price card to the system prompt")
     parser.add_argument("--notes-file", type=Path, help="put this text at the top of each decision's scratchpad")
+    parser.add_argument("--opponent-replays", type=Path,
+                        help="put prior betting counts in the scratchpad from the source replays; hand 1 starts empty")
     parser.add_argument("--balance", action="store_true", help="equal numbers of clear fold and non-fold plans")
     parser.add_argument("--min-share", type=float, default=0.0, help="skip calls smaller than this share of the stack")
     parser.add_argument("--limit", type=int)

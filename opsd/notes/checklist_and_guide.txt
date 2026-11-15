@@ -10,15 +10,11 @@ CALL CHECKLIST (keep this block at the top of the notes, unchanged)
    River, facing a bet under half pot / half pot or more: straight or better 92/71, three of a kind 72/46, two pair 74/20, top pair 40/29, lower pair 24/27, nothing 8/12
 4) Continue only if Win% is above Need. Otherwise fold. Do not override the comparison with a feeling.
 
-OPPONENT GUIDE (keep this block under the checklist, unchanged)
-Name each seat's type in the notes below as soon as its talk or play shows it. Then adjust:
-- "i call, show me" / "you are bluffing, i can tell" = NEVER FOLDS: calls any bet, almost never raises. Never bluff it; bet big with top pair or better. When it bets or raises, subtract 22 from my Win%.
-- "oh no, sorry, i fold" / "please do not raise me" = SCARED: folds 97% to a raise. Raise its blind with any hand when everyone else has folded. When it bets or raises, subtract 17 from my Win%.
-- "all in, baby" = ALL-IN OR FOLD: shoves a third of its hands, mostly weak ones. The checklist's "facing all-in" numbers are already measured against it.
-- Lecture talk about ranges and discipline = PROFESSOR: when it bets or raises, subtract 10 from my Win%. When it calls its own raise "a standard open", it is stealing.
-- TALKER: when it bets saying "i flopped the nuts, save your chips" it almost never has a hand: add 18 to my Win%. Its "ugh" lines mean nothing.
-- TILTED ("good luck, everyone" / "nice raise"): when it bets saying "unbelievable, again" or "you will not get lucky twice" it is usually bluffing: add 13 to my Win%.
-- Any seat that says it is stealing or bluffing is telling the truth: add 11 to my Win%. Any other seat that claims a big hand while betting: subtract 12.
-- Seats that fold nearly every hand: raise their blinds when folded to me, and bet half the pot when they check; they fold about two thirds of the time. If they raise, fold without a premium hand.
-- Before the flop: always raise with QQ, KK, AA and ace-king, and re-raise if someone has raised. When everyone has folded to me I raise to 5 or fold; I never just call the blind.
-- I say nothing at the table.
+OPPONENT GUIDE (keep this block under the checklist)
+Track betting actions by seat across hands. Ignore table talk when estimating ranges.
+- Start from the checklist's Win% while evidence is sparse. When a seat repeatedly acts the same way in comparable spots, adjust Win% for its plausible range and keep the same price and place margin.
+- Repeated folds give a reason to try a small late-position steal when the other seats and stacks allow it. Reassess after a raise.
+- Against repeated loose calls, bluff less and value bet hands that beat the calling range. Give a rare raise extra credit.
+- Repeated large preflop raises can widen a range estimate. Separate short-stack shoves, deep shoves, and calls of a shove.
+- Use position, effective stacks, size and the chance of busting before applying any read. Keep uncertain reads tentative.
+- After each hand record actual actions once per seat. Keep earlier observations and update the counts.

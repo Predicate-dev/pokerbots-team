@@ -223,3 +223,23 @@ To collect opening traces from an existing teacher deployment, add
 `--decision open --spots harness/runs/open_spots.jsonl` to both `opsd/price_run.py` and
 `opsd/build_price_dataset.py`. Use `--hint --balance` on the collection step. The builder leaves out held-out
 spots and checks that a hinted reply follows the card with a legal small raise or fold.
+
+## Terminal call teacher
+
+`build_terminal_teacher.py` checks heads-up all-ins and river calls that close the action against the arena replay
+payouts. The teacher settles both choices, including dead chips, splits and uncalled chips, and scores the resulting
+stack by expected finishing place. It estimates the opponent's range using betting frequencies from training matches
+with a prior fitted to Pluribus's published decisions. The report compares the same procedure with field data alone.
+The teacher exports only training decisions where the call or fold is favored across its three ranges.
+
+```bash
+uv run --project harness python opsd/build_terminal_teacher.py --replays arena_data \
+  --pluribus /path/to/phh-dataset/data/pluribus --spots harness/runs/arena-call-spots.jsonl \
+  --fresh harness/runs/post-open-card-call-spots.jsonl --out harness/runs/terminal-teacher --samples 512
+uv run --project harness python opsd/simulate_cards.py \
+  --terminal-ranges harness/runs/terminal-teacher/ranges.json --seed 20288000 --games 512
+```
+
+The fresh call bank should come from matches disjoint from the original bank. The local SFT dry run uses
+`uv run python sft/build_dataset.py --examples harness/runs/terminal-teacher/examples.jsonl --dataset pokerbots-terminal-calls --max-fold-share 0.6`.
+For an AC2 run preview, use `uv run python sft/train.py --dataset pokerbots-terminal-calls --from-checkpoint <parent> --steps 4 --batch 32 --checkpoint-every 2 --dry-run`.

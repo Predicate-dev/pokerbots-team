@@ -146,6 +146,7 @@ def parse(messages: list[Any]) -> dict[str, Any] | None:
         return None
     me = me[0]
     to_call = int(call[1])
+    cap = me["bet"] + min(to_call, me["stack"])
     others = [s for s in seats if not s["you"] and s["status"] not in ("folded", "out")]
     committed = [s for s in others if s["bet"] >= me["bet"] + to_call or s["status"] == "all-in"]
     all_in = [s for s in committed if s["status"] == "all-in"]
@@ -153,6 +154,8 @@ def parse(messages: list[Any]) -> dict[str, Any] | None:
         "to_call": to_call, "stack": me["stack"],
         "committed": max(1, len(committed)), "all_in": len(all_in), "all_in_size": max((s["bet"] for s in all_in), default=0),
         "street_bet": me["bet"] + to_call,
+        "covered_all_ins": sum(s["bet"] <= cap for s in all_in),
+        "unreachable_street_bets": sum(max(0, s["bet"] - cap) for s in seats if not s["you"]),
     }
 
 
@@ -218,10 +221,13 @@ def card(messages: list[Any], table: dict[str, Any] | None = None) -> dict[str, 
         return None
     table = table or tables()
     stack, to_call, pot, live, hand = spot["stack"], min(spot["to_call"], spot["stack"]), spot["pot"], spot["live"], spot["hand"]
-    busted = spot["all_in"] if stack >= to_call else 0  # all-in opponents we cover go out if we win
+    # These public street bets are a lower bound on chips the caller cannot win. Earlier multiway side pots
+    # need the full commitment ledger, which the terminal call teacher uses for its narrower class of spots.
+    pot -= spot["unreachable_street_bets"]
+    busted = spot["covered_all_ins"]
     fold = stack_value(live, hand, stack, table["value"])
     lose = stack_value(live, hand, stack - to_call, table["value"])
-    won = stack_value(max(2, live - busted), hand, stack + pot, table["value"])
+    won = stack_value(live - busted, hand, stack + pot, table["value"])
     price = to_call / (pot + to_call)
     need = (fold - lose) / (won - lose) if won - lose > 0.02 else price
     need = min(0.95, max(0.03, need))
@@ -235,14 +241,14 @@ def card(messages: list[Any], table: dict[str, Any] | None = None) -> dict[str, 
             kind = {4: "a straight", 5: "a flush"}.get(_strength(spot["hole"] + spot["board"]), "a full house or better")
     return spot | {
         "price": price, "need": need, "win": win, "fold_value": fold, "lose_value": lose, "win_value": won,
-        "share": to_call / max(1, stack), "kind": kind,
+        "share": to_call / max(1, stack), "kind": kind, "contestable_pot": pot,
         "plan": "close" if abs(win - need) < CLOSE else "continue" if win > need else "fold",
     }
 
 
 def hint(c: dict[str, Any]) -> str:
     """Teacher-only text: the numbers and the order to reason in."""
-    stack, to_call, pot, live = c["stack"], min(c["to_call"], c["stack"]), c["pot"], c["live"]
+    stack, to_call, pot, live = c["stack"], min(c["to_call"], c["stack"]), c["contestable_pot"], c["live"]
     bust = stack - to_call <= 0
     after_loss = (f"you are out in place {live} of 6, the worst result still possible" if bust
                   else f"you are left with {stack - to_call} chips")

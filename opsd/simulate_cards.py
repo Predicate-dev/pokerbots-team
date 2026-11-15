@@ -10,10 +10,12 @@ import statistics
 import sys
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
+from functools import lru_cache
 from pathlib import Path
 
 import open_card
 import price_card
+import terminal_calls as terminal
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "harness" / "src"))
 from poker_harness.completions import EVENT_PARAMS, table_rules  # noqa: E402
@@ -27,15 +29,69 @@ from poker_harness.prompts import decision_prompt  # noqa: E402
 RULES = table_rules(EVENT_PARAMS)
 ARMS = ("scripted", "chip_price", "placement_price", "open_only", "open_and_placement")
 LINEUPS = ("house", "mixed", "tight")
+RANGE_ARMS = ("range_field_only", "range_pluribus", "open_and_range")
+
+
+@lru_cache(maxsize=128)
+def terminal_worlds(spot: terminal.Call) -> list[tuple[str, int]]:
+    return terminal.worlds(spot, 256, repr(spot))
 
 
 class CardPlayer(HouseStylePlayer):
-    def __init__(self, name: str, seed: int, arm: str) -> None:
+    def __init__(
+        self, name: str, seed: int, arm: str, book: dict | None = None
+    ) -> None:
         super().__init__(name, "house_pete", seed, talk_mode="muted")
         self.arm = arm
         self.changed = 0
         self.first_in = 0
         self.opened = 0
+        self.book = book
+        self.starting: dict[int, int] = {}
+        self.range_decisions = 0
+
+    def begin_hand(self, info: dict) -> None:
+        self.starting = {
+            int(name.removeprefix("seat")): stack
+            for name, stack in info["stacks"].items()
+        }
+
+    def range_action(
+        self, ctx: DecisionContext, messages: list[dict], book: dict
+    ) -> str | None:
+        bets = [
+            a
+            for a in ctx.hand_actions
+            if a["street"] == ctx.street and a["action"]["type"] in ("bet", "raise")
+        ]
+        if not bets:
+            return None
+        spot = terminal.public_call(
+            messages, self.starting, bets[-1]["seat"], len(bets) > 1
+        )
+        if spot is None:
+            return None
+        if (
+            ctx.street == "river"
+            and not spot.shove
+            and ctx.legal.raise_type
+            and terminal.hand_bucket(spot.hole, spot.board)
+            in {
+                "monster",
+                "trips",
+                "two_pair",
+            }
+        ):
+            return None
+        _, gains = terminal.values(spot, price_card.tables()["value"])
+        edges = terminal.estimate(
+            spot,
+            terminal_worlds(spot),
+            book,
+            gains,
+            use_pluribus=self.arm != "range_field_only",
+        )
+        return terminal.robust_action(edges)
 
     async def decide(self, ctx: DecisionContext, history: str) -> Decision:
         default = await super().decide(ctx, history)
@@ -50,16 +106,22 @@ class CardPlayer(HouseStylePlayer):
         decision = default
         if first_in:
             self.first_in += 1
-            if self.arm in ("open_only", "open_and_placement"):
+            if self.arm in ("open_only", "open_and_placement", "open_and_range"):
                 c = open_card.card([{"role": "user", "content": decision_prompt(ctx)}])
                 if c and c["clear"]:
                     amount = c["raise_to"] if c["plan"] == "raise" else None
                     decision = Decision(c["plan"], amount, default.model_response)
             self.opened += decision.type == "raise"
-        elif self.arm in ("chip_price", "placement_price", "open_and_placement"):
+        elif self.arm in (
+            "chip_price",
+            "placement_price",
+            "open_and_placement",
+            *RANGE_ARMS,
+        ):
             stack = next(s.stack for s in ctx.seats if s.seat == ctx.seat)
             if legal.call_amount >= 0.12 * stack or ctx.street == "river":
-                c = price_card.card([{"role": "user", "content": decision_prompt(ctx)}])
+                messages = [{"role": "user", "content": decision_prompt(ctx)}]
+                c = price_card.card(messages)
                 if c:
                     threshold = c["price"] if self.arm == "chip_price" else c["need"]
                     edge = c["win"] - threshold
@@ -71,6 +133,14 @@ class CardPlayer(HouseStylePlayer):
                         decision = Decision(
                             "fold", model_response=default.model_response
                         )
+                if (
+                    self.book
+                    and self.arm in RANGE_ARMS
+                    and default.type in ("fold", "call")
+                    and (action := self.range_action(ctx, messages, self.book))
+                ):
+                    self.range_decisions += 1
+                    decision = Decision(action, model_response=default.model_response)
         self.changed += (decision.type, decision.amount) != (
             default.type,
             default.amount,
@@ -78,7 +148,7 @@ class CardPlayer(HouseStylePlayer):
         return decision
 
 
-async def play(seed: int, lineup: str, arm: str) -> dict:
+async def play(seed: int, lineup: str, arm: str, book: dict | None = None) -> dict:
     rng = random.Random(seed)
     hero = rng.randrange(RULES.seats)
     styles = [style for style in HOUSE_STYLES if style != "house_pete"]
@@ -87,7 +157,7 @@ async def play(seed: int, lineup: str, arm: str) -> dict:
     elif lineup == "tight":
         styles = ["nit", "nit", "house_alice", "house_bob", "house_tim"]
     rng.shuffle(styles)
-    policy = CardPlayer(f"seat{hero}", seed, arm)
+    policy = CardPlayer(f"seat{hero}", seed, arm, book)
     players = []
     for seat in range(RULES.seats):
         name = f"seat{seat}"
@@ -113,18 +183,25 @@ async def play(seed: int, lineup: str, arm: str) -> dict:
         "changed_actions": policy.changed,
         "first_in_opportunities": policy.first_in,
         "opens": policy.opened,
+        "range_decisions": policy.range_decisions,
     }
 
 
-def paired(job: tuple[int, str]) -> list[dict]:
-    seed, lineup = job
-    return [asyncio.run(play(seed, lineup, arm)) for arm in ARMS]
+def paired(job: tuple[int, str, dict | None]) -> list[dict]:
+    seed, lineup, book = job
+    arms = (
+        ("scripted", "placement_price", "open_and_placement", *RANGE_ARMS)
+        if book
+        else ARMS
+    )
+    return [asyncio.run(play(seed, lineup, arm, book)) for arm in arms]
 
 
 def summarize(pairs: list[list[dict]], control: str) -> dict:
     metrics = {}
-    baseline = ARMS.index(control)
-    for index, arm in enumerate(ARMS):
+    arms = tuple(row["arm"] for row in pairs[0])
+    baseline = arms.index(control)
+    for index, arm in enumerate(arms):
         rows = [pair[index] for pair in pairs]
         deltas = [pair[index]["points"] - pair[baseline]["points"] for pair in pairs]
         mean = statistics.fmean(deltas)
@@ -142,6 +219,7 @@ def summarize(pairs: list[list[dict]], control: str) -> dict:
                 row["first_in_opportunities"] for row in rows
             ),
             "opens": sum(row["opens"] for row in rows),
+            "range_decisions": sum(row.get("range_decisions", 0) for row in rows),
             f"delta_over_{control}": round(mean, 4),
             "paired_95_interval": None
             if margin is None
@@ -161,11 +239,19 @@ def main() -> None:
         "--out", type=Path, default=Path("harness/runs/card-sims.jsonl")
     )
     parser.add_argument("--lineups", choices=LINEUPS, nargs="+", default=LINEUPS)
+    parser.add_argument(
+        "--terminal-ranges",
+        type=Path,
+        help="Compare terminal teachers using a trained ranges.json",
+    )
     args = parser.parse_args()
     if min(args.games, args.workers) < 1:
         parser.error("--games and --workers must be positive")
+    book = (
+        json.loads(args.terminal_ranges.read_text()) if args.terminal_ranges else None
+    )
     jobs = [
-        (args.seed + index * args.games + offset, lineup)
+        (args.seed + index * args.games + offset, lineup, book)
         for index, lineup in enumerate(dict.fromkeys(args.lineups))
         for offset in range(args.games)
     ]

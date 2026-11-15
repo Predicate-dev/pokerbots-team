@@ -106,7 +106,7 @@ def task(example: dict, index: int, say: str = "") -> Task:
         return cleanup_task(example, index)
     arguments = example["action"] | {"say": say} if say else example["action"]
     conversation = items(example["messages"]) + [
-        {"type": "reasoning", "content": brief_reason(example)},
+        {"type": "reasoning", "content": example.get("reasoning") or brief_reason(example)},
         {"type": "message", "role": "assistant", "content": BETWEEN},
         {"type": "function_call", "call_id": f"call-target-{index}", "name": "submit_action",
          "arguments": json.dumps(arguments)},

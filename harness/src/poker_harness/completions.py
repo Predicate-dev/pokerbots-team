@@ -259,6 +259,10 @@ def table_rules(params: dict[str, Any]) -> TableRules:
         cleanup_max_completion_tokens=(
             int(params["cleanup_max_completion_tokens"]) if params.get("cleanup_max_completion_tokens") else None
         ),
+        starting_stacks=tuple(int(s) for s in params["starting_stacks"]) if params.get("starting_stacks") else None,
+        first_hand=int(params.get("first_hand", 1)),
+        play_hands=int(params["play_hands"]) if params.get("play_hands") else None,
+        button_seat=int(params["button_seat"]) if params.get("button_seat") is not None else None,
     )
 
 
@@ -273,6 +277,10 @@ def rules_output(rules: TableRules) -> dict[str, Any]:
         "scratchpad": False,
         "scratchpad_chars": 5000,
         "cleanup_max_completion_tokens": None,
+        "starting_stacks": None,
+        "first_hand": 1,
+        "play_hands": None,
+        "button_seat": None,
     }  # left out at their defaults, so 10-max talk-off outputs are unchanged
     return {k: v for k, v in asdict(rules).items() if k not in defaults or v != defaults[k]}
 

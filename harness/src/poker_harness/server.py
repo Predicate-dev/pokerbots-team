@@ -48,6 +48,8 @@ from .game import play_session
 from .grading import GradingError, bounded, check_grader_params, failure_score, grade_log
 from .house_bots import TALK_MODES
 from .labels import label_folds
+from .ledger import from_params as ledger_from_params
+from .ledger import render as render_ledger
 from .prompts import TableRules, talk_fields
 from .seat import ModelSeat
 from .training import TrainingSetupError, opponent_specs, scripted_player, spec_params, table_start
@@ -133,6 +135,13 @@ ESSENTIAL_RESPONSE = (
     "out_tokens",
     "reasoning_tokens",
 )
+
+
+def starting_scratchpad(params: dict[str, Any]) -> str:
+    """The notes a training task puts in the policy seats' scratchpads before the first hand ("" for none)."""
+    if params.get("starting_ledger"):
+        return render_ledger(ledger_from_params(params["starting_ledger"]))
+    return str(params.get("starting_scratchpad") or "")
 
 
 def _size(log: dict[str, Any]) -> int:
@@ -310,6 +319,11 @@ def create_app(
                         cleanup_complete=api(opponent_client, opponent_url, key, cleanup_params(seat_params)),
                         persona=spec.get("persona", ""),
                     )
+                # Persona training may seed every policy seat from a rendered ledger or a shared note.  Explicit
+                # per-seat `initial_scratchpad` values from the training-fork setup take precedence below.
+                notes = starting_scratchpad(params)
+                for i in policy if notes else ():
+                    players[i].scratchpad = notes[: rollout.rules.scratchpad_chars]
                 for i, text in start.scratchpads.items():  # `env_params.initial_scratchpad`
                     if isinstance(players[i], ModelSeat):
                         players[i].scratchpad = text

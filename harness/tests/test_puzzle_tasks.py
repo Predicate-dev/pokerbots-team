@@ -45,7 +45,7 @@ def reply(action: str) -> Completion:
     return Completion(text="", tool_arguments=arguments, tool_calls=[call])
 
 
-def run(answer: Completion, label: dict) -> tuple[dict, list]:
+def run(answer: Completion, label: dict, notes: str | None = None) -> tuple[dict, list]:
     hand, seat, decision, _ = logged_hand()
     asked: list = []
 
@@ -53,7 +53,8 @@ def run(answer: Completion, label: dict) -> tuple[dict, list]:
         asked.append(messages)
         return answer
 
-    puzzle = check_puzzle({"hand": hand, "seat": seat, "decision": decision, "label": label}, 6)
+    extra = {} if notes is None else {"notes": notes}
+    puzzle = check_puzzle({"hand": hand, "seat": seat, "decision": decision, "label": label} | extra, 6)
     return asyncio.run(play_puzzle("p", 5, puzzle, EVENT, policy)), asked
 
 
@@ -106,3 +107,14 @@ def test_a_label_with_values_is_graded_in_rating_points() -> None:
     assert grade_puzzle(run(reply("call"), late)[0])["score"] > 6.0
     with pytest.raises(PuzzleError):
         check_puzzle({"hand": {"actions": [{"seat": 0}]}, "seat": 0, "decision": 0, "label": label | {"values": {"fold": 0.1}}}, 6)
+
+
+def test_notes_are_in_the_scratchpad_the_policy_is_shown() -> None:
+    label = {"equity": 0.5, "to_call": 10, "pot": 30}
+    _, asked = run(reply("fold"), label, notes="CALL CHECKLIST\n1) price first")
+    shown = "\n".join(str(m.get("content")) for m in asked[0] if m.get("role") == "user")
+    assert "CALL CHECKLIST\n1) price first" in shown and "(empty)" not in shown
+    _, asked = run(reply("fold"), label)
+    assert "(empty)" in "\n".join(str(m.get("content")) for m in asked[0] if m.get("role") == "user")
+    with pytest.raises(PuzzleError):
+        run(reply("fold"), label, notes="x" * 5_001)

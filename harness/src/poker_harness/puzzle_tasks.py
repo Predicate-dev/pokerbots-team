@@ -11,6 +11,7 @@ nothing after it is played with the model.
         "seat": 3,            # the policy seat
         "decision": 1,        # which of that seat's actions in this hand is the question (0 = its first)
         "label": {"equity", "to_call", "pot", "risk"},                   # from `harness/puzzles.py`
+        "notes": "...",       # optional: the seat's scratchpad when the hand starts (default empty)
     }
 
 The reward compares continuing with folding, in chips, from the seat's real equity against the hands that stayed in:
@@ -92,6 +93,9 @@ def check_puzzle(puzzle: Any, seats: int) -> dict[str, Any]:
             raise PuzzleError(f"env_params.puzzle.label.{key} must be a number")
     if not 0 <= label["equity"] <= 1 or label["to_call"] <= 0 or label["pot"] <= 0:
         raise PuzzleError("env_params.puzzle.label is out of range")
+    notes = puzzle.get("notes", "")
+    if not isinstance(notes, str) or len(notes) > 5_000:
+        raise PuzzleError("env_params.puzzle.notes must be text of at most 5000 characters")
     values = label.get("values")
     if values is not None and not (
         isinstance(values, dict) and all(isinstance(values.get(key), (int, float)) for key in ("fold", "lose", "win"))
@@ -137,6 +141,7 @@ async def play_puzzle(
         else _ReplaySeat(f"seat{s}", by_seat[s], phase)
         for s in range(rules.seats)
     ]
+    players[seat].scratchpad = puzzle.get("notes", "")  # what the seat's notes hold when the hand starts
     stacks = dict.fromkeys(range(rules.seats), 0) | {p["seat"]: p["starting_stack"] for p in hand["players"]}
     log = await play_session(
         game_id, seed, players, rules,
